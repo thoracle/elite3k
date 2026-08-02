@@ -34,11 +34,11 @@ canvas#gl{position:fixed;inset:0;width:100%;height:100%;display:block;}
   width:min(80vw,560px);text-align:center;font-size:clamp(11px,1.9vmin,16px);letter-spacing:.1em;}
 #msgs div{text-shadow:var(--glow);margin-bottom:2px;transition:opacity .5s;}
 #crosshair{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
-  width:34px;height:34px;opacity:.85;}
+  width:102px;height:102px;opacity:.85;}
 #crosshair::before,#crosshair::after{content:'';position:absolute;background:var(--cy);box-shadow:var(--glow);}
-#crosshair::before{left:50%;top:0;width:1px;height:100%;transform:translateX(-.5px);
+#crosshair::before{left:50%;top:0;width:2px;height:100%;transform:translateX(-1px);
   -webkit-mask:linear-gradient(#000 0 28%,transparent 28% 72%,#000 72%);mask:linear-gradient(#000 0 28%,transparent 28% 72%,#000 72%);}
-#crosshair::after{top:50%;left:0;height:1px;width:100%;transform:translateY(-.5px);
+#crosshair::after{top:50%;left:0;height:2px;width:100%;transform:translateY(-1px);
   -webkit-mask:linear-gradient(90deg,#000 0 28%,transparent 28% 72%,#000 72%);mask:linear-gradient(90deg,#000 0 28%,transparent 28% 72%,#000 72%);}
 #lockbox{position:absolute;left:50%;top:50%;width:52px;height:52px;transform:translate(-50%,-50%);
   border:1px solid var(--rd);box-shadow:0 0 10px rgba(255,84,112,.7);opacity:0;}
