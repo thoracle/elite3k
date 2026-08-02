@@ -1,6 +1,6 @@
 # ELITE 3K
 
-A single-file HTML5 tribute to *Elite* (1984) — neon-wireframe 3D, vanilla JS + three.js (CDN), built for both touch and keyboard.
+A single-file HTML5 tribute to *Elite* (1984) — retro flat-shaded 3D in the style of the 16-bit ports, vanilla JS + three.js (CDN), built for both touch and keyboard.
 
 **Play it: <https://thoracle.github.io/elite3k/>**
 
@@ -26,7 +26,8 @@ A single-file HTML5 tribute to *Elite* (1984) — neon-wireframe 3D, vanilla JS 
 - **Living space**: freighters launch from and dock at stations; planets vary — rings, moons, binary suns, settlement lights on populous worlds
 - Auto-save at every dock/launch, 3 manual slots, plus export/import transfer codes
 - Procedural WebAudio sound **and a generative ambient soundtrack** (calm pads in flight, opens up in combat, gentle arpeggios docked)
-- Neon cockpit frame, bloom glow (auto-disables on weak GPUs), optional **mouse steering** (desktop) and **tilt assist** (mobile) in STATUS settings
+- **Flat-shaded solid hulls** lit by the system's own sun — faceted ships, faceted planets with a day/night terminator, dark docking slot with landing-light rim
+- Vector cockpit frame and HUD, bloom on lasers and stars (auto-disables on weak GPUs), optional **mouse steering** (desktop) and **tilt assist** (mobile) in STATUS settings
 
 ## Controls
 

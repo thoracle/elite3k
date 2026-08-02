@@ -282,6 +282,7 @@ import * as THREE from 'three';
 import {EffectComposer} from 'three/addons/postprocessing/EffectComposer.js';
 import {RenderPass} from 'three/addons/postprocessing/RenderPass.js';
 import {UnrealBloomPass} from 'three/addons/postprocessing/UnrealBloomPass.js';
+import {ConvexGeometry} from 'three/addons/geometries/ConvexGeometry.js';
 
 /* ============================================================
    ELITE 3K — a single-file tribute to Elite (1984)
@@ -622,85 +623,88 @@ const RANKS=[[0,'HARMLESS'],[8,'MOSTLY HARMLESS'],[16,'POOR'],[32,'AVERAGE'],[64
 function rankName(kills){let r=RANKS[0][1];for(const [k,n] of RANKS)if(kills>=k)r=n;return r;}
 function legalName(l){return l<=0?'CLEAN':l<32?'OFFENDER':'FUGITIVE';}
 
-/* ---------------- ship wireframe data ----------------
-   coordinates: nose toward -Z, up +Y                    */
+/* ---------------- ship hull data ----------------
+   coordinates: nose toward -Z, up +Y.
+   Vertices form a convex point cloud; a raised spine and keel along the
+   centreline split each broad surface into separate facets so the flat
+   shading reads as volume rather than one flat plate.               */
 const SHIPS={
   sidewinder:{label:'SIDEWINDER',hp:24,speed:370,turn:1.5,dmg:4,fireRate:2.2,bounty:[15,40],size:22,
-    v:[[-8,0,-18],[8,0,-18],[20,0,16],[-20,0,16],[0,7,12],[0,-7,12]],
-    e:[[0,1],[1,2],[2,3],[3,0],[0,4],[1,4],[2,4],[3,4],[0,5],[1,5],[2,5],[3,5]]},
+    v:[[-8,0,-18],[8,0,-18],[0,3,-19],[0,-2,-18],
+       [20,0,16],[-20,0,16],[0,7,12],[0,-7,12],[0,2,16]]},
   krait:{label:'KRAIT',hp:30,speed:340,turn:1.35,dmg:5,fireRate:2.0,bounty:[20,60],size:26,
-    v:[[0,0,-26],[0,8,14],[0,-8,14],[-24,0,8],[24,0,8],[0,0,20]],
-    e:[[0,1],[0,2],[0,3],[0,4],[1,5],[2,5],[3,5],[4,5],[1,3],[1,4],[2,3],[2,4]]},
+    v:[[0,0,-26],[0,8,14],[0,-8,14],[-24,0,8],[24,0,8],[0,0,20],
+       [-6,3,2],[6,3,2],[-6,-3,2],[6,-3,2]]},
   mamba:{label:'MAMBA',hp:35,speed:390,turn:1.5,dmg:5,fireRate:1.8,bounty:[30,80],size:26,missiles:1,
-    v:[[0,0,-28],[-22,0,14],[22,0,14],[-9,6,14],[9,6,14],[-9,-4,14],[9,-4,14]],
-    e:[[0,1],[0,2],[1,3],[3,4],[4,2],[2,6],[6,5],[5,1],[0,3],[0,4],[0,5],[0,6]]},
+    v:[[0,0,-28],[-22,0,14],[22,0,14],[-9,6,14],[9,6,14],[-9,-4,14],[9,-4,14],
+       [0,7,6],[0,-5,4]]},
   adder:{label:'ADDER',hp:28,speed:280,turn:1.1,dmg:3,fireRate:2.6,bounty:[10,30],size:22,
-    v:[[-6,-4,-16],[6,-4,-16],[6,4,-16],[-6,4,-16],[-10,-6,14],[10,-6,14],[10,6,14],[-10,6,14]],
-    e:[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]]},
+    v:[[-6,-4,-16],[6,-4,-16],[6,4,-16],[-6,4,-16],[0,6,-14],
+       [-10,-6,14],[10,-6,14],[10,6,14],[-10,6,14],[0,9,4],[0,-7,4]]},
   cobra:{label:'COBRA MK III',hp:55,speed:400,turn:1.4,dmg:6,fireRate:1.7,bounty:[40,110],size:38,
-    v:[[-10,0,-26],[10,0,-26],[-38,0,12],[38,0,12],[-10,7,10],[10,7,10],[-10,-6,10],[10,-6,10]],
-    e:[[0,1],[0,2],[1,3],[0,4],[1,5],[0,6],[1,7],[2,4],[4,5],[5,3],[3,7],[7,6],[6,2]]},
+    v:[[-10,0,-26],[10,0,-26],[0,2,-28],
+       [-38,0,12],[38,0,12],
+       [-10,7,10],[10,7,10],[0,10,4],
+       [-10,-6,10],[10,-6,10],[0,-7,2],
+       [0,4,12]]},
   asp:{label:'ASP MK II',hp:60,speed:420,turn:1.5,dmg:7,fireRate:1.5,bounty:[70,160],size:30,missiles:2,
-    v:[[0,0,-26],[-20,2,2],[20,2,2],[0,9,4],[0,-6,2],[-12,0,18],[12,0,18],[0,5,18]],
-    e:[[0,1],[0,2],[0,3],[0,4],[1,3],[2,3],[1,4],[2,4],[1,5],[2,6],[3,7],[5,7],[6,7],[5,6],[4,5],[4,6]]},
+    v:[[0,0,-26],[-20,2,2],[20,2,2],[0,9,4],[0,-6,2],[-12,0,18],[12,0,18],[0,5,18],
+       [-7,5,-6],[7,5,-6]]},
   viper:{label:'VIPER',hp:45,speed:440,turn:1.7,dmg:6,fireRate:1.6,bounty:[0,0],size:26,
-    v:[[0,0,-24],[-16,0,10],[16,0,10],[0,7,10],[0,-5,10],[-24,0,16],[24,0,16]],
-    e:[[0,1],[0,2],[0,3],[0,4],[1,3],[3,2],[2,4],[4,1],[1,5],[2,6],[5,6]]},
+    v:[[0,0,-24],[-16,0,10],[16,0,10],[0,7,10],[0,-5,10],[-24,0,16],[24,0,16],
+       [0,5,0],[0,-4,2]]},
   python:{label:'PYTHON',hp:120,speed:250,turn:0.8,dmg:6,fireRate:2.4,bounty:[80,200],size:48,
-    v:[[0,0,-40],[-26,0,0],[26,0,0],[0,14,0],[0,-10,0],[0,0,36]],
-    e:[[0,1],[0,2],[0,3],[0,4],[5,1],[5,2],[5,3],[5,4],[1,3],[3,2],[2,4],[4,1]]},
+    v:[[0,0,-40],[-26,0,0],[26,0,0],[0,14,0],[0,-10,0],[0,0,36],
+       [-14,7,-14],[14,7,-14],[-14,-6,-14],[14,-6,-14],
+       [-13,7,16],[13,7,16],[-13,-5,16],[13,-5,16]]},
   anaconda:{label:'ANACONDA',hp:200,speed:200,turn:0.6,dmg:8,fireRate:2.2,bounty:[150,350],size:60,
     v:[[0,0,-52],
        [18,0,-10],[9,14,-10],[-9,14,-10],[-18,0,-10],[-9,-12,-10],[9,-12,-10],
-       [14,0,40],[7,11,40],[-7,11,40],[-14,0,40],[-7,-9,40],[7,-9,40]],
-    e:[[0,1],[0,2],[0,3],[0,4],[0,5],[0,6],
-       [1,2],[2,3],[3,4],[4,5],[5,6],[6,1],
-       [7,8],[8,9],[9,10],[10,11],[11,12],[12,7],
-       [1,7],[2,8],[3,9],[4,10],[5,11],[6,12]]},
+       [14,0,40],[7,11,40],[-7,11,40],[-14,0,40],[-7,-9,40],[7,-9,40],
+       [10,8,14],[-10,8,14],[10,-7,14],[-10,-7,14],[19,0,14],[-19,0,14]]},
   ferdelance:{label:'FER-DE-LANCE',hp:70,speed:440,turn:2.0,dmg:7,fireRate:1.4,bounty:[90,180],size:30,
-    v:[[0,1,-30],[-20,0,14],[20,0,14],[0,7,6],[0,-4,8],[-8,5,14],[8,5,14],[-8,-3,14],[8,-3,14]],
-    e:[[0,1],[0,2],[0,3],[0,4],[3,5],[3,6],[1,5],[2,6],[5,6],[1,7],[2,8],[7,8],[4,7],[4,8],[5,7],[6,8]]},
+    v:[[0,1,-30],[-20,0,14],[20,0,14],[0,9,4],[0,-5,8],[-8,5,14],[8,5,14],[-8,-3,14],[8,-3,14],
+       [-7,4,-8],[7,4,-8]]},
   constrictor:{label:'CONSTRICTOR',hp:260,speed:460,turn:1.8,dmg:10,fireRate:1.2,bounty:[0,0],size:40,
-    v:[[-10,0,-30],[10,0,-30],[0,3,-18],[-26,0,10],[26,0,10],[0,8,4],[-10,4,16],[10,4,16],[-10,-4,16],[10,-4,16],[0,-5,4]],
-    e:[[0,2],[1,2],[0,3],[1,4],[2,5],[5,6],[5,7],[3,6],[4,7],[6,7],[8,9],[3,8],[4,9],[0,10],[1,10],[10,8],[10,9],[6,8],[7,9]]},
-  thargoid:{label:'THARGOID WARSHIP',hp:110,speed:380,turn:1.7,dmg:9,fireRate:1.5,bounty:[220,360],size:42,
-    v:[[0,10,0],[0,-8,0],
+    v:[[-10,0,-30],[10,0,-30],[0,4,-30],
+       [-26,0,10],[26,0,10],[0,11,2],[-10,5,16],[10,5,16],[-10,-5,16],[10,-5,16],[0,-7,2],
+       [0,6,16]]},
+  thargoid:{label:'THARGOID WARSHIP',hp:110,speed:380,turn:1.5,dmg:9,fireRate:1.5,bounty:[220,360],size:42,
+    v:[[0,13,0],[0,-11,0],
        [36,0,0],[25.5,0,-25.5],[0,0,-36],[-25.5,0,-25.5],[-36,0,0],[-25.5,0,25.5],[0,0,36],[25.5,0,25.5],
-       [18,5,0],[12.7,5,-12.7],[0,5,-18],[-12.7,5,-12.7],[-18,5,0],[-12.7,5,12.7],[0,5,18],[12.7,5,12.7]],
-    e:[[2,3],[3,4],[4,5],[5,6],[6,7],[7,8],[8,9],[9,2],
-       [10,11],[11,12],[12,13],[13,14],[14,15],[15,16],[16,17],[17,10],
-       [2,10],[3,11],[4,12],[5,13],[6,14],[7,15],[8,16],[9,17],
-       [0,10],[0,12],[0,14],[0,16],
-       [1,2],[1,4],[1,6],[1,8]]},
+       [20,6,0],[14,6,-14],[0,6,-20],[-14,6,-14],[-20,6,0],[-14,6,14],[0,6,20],[14,6,14],
+       [17,-5,0],[12,-5,-12],[0,-5,-17],[-12,-5,-12],[-17,-5,0],[-12,-5,12],[0,-5,17],[12,-5,12]]},
   missile:{label:'MISSILE',hp:1,speed:640,turn:2.6,size:6,
-    v:[[0,0,-7],[-1.6,1.6,5],[1.6,1.6,5],[1.6,-1.6,5],[-1.6,-1.6,5]],
-    e:[[0,1],[0,2],[0,3],[0,4],[1,2],[2,3],[3,4],[4,1]]},
+    v:[[0,0,-7],[-1.6,1.6,5],[1.6,1.6,5],[1.6,-1.6,5],[-1.6,-1.6,5],[0,2.2,0],[0,-2.2,0]]},
   pod:{label:'ESCAPE POD',hp:1,speed:80,turn:1,size:6,
-    v:[[0,0,-5],[-3,3,3],[3,3,3],[3,-3,3],[-3,-3,3]],
-    e:[[0,1],[0,2],[0,3],[0,4],[1,2],[2,3],[3,4],[4,1]]},
+    v:[[0,0,-5],[-3,3,3],[3,3,3],[3,-3,3],[-3,-3,3],[0,4,0],[0,-4,0]]},
 };
 
+/* retro flat-shaded hull palette: saturated 16-bit port colours that hold
+   their identity once the lambert ramp darkens the off-facing facets */
 const COLORS={
-  pirate:0xff5470, trader:0xffb347, police:0x6ea8ff, player:0x63e6f2,
-  asteroid:0x8fa3ad, canister:0x63e6f2, splinter:0x9fe8c8, missile:0xe070ff,
-  station:0x63e6f2, planet:0x7dff9b, hostileMissile:0xff5470,
+  pirate:0xe05a70, trader:0xf0b455, police:0x6f9fe8, player:0x63e6f2,
+  asteroid:0x94a1ad, canister:0x4fc4d6, splinter:0x7ee0bc, missile:0xdf7cf5,
+  station:0xaebcc9, planet:0x7dff9b, hostileMissile:0xff5470,
 };
 
-function shipGeometry(def){
-  const pos=[];
-  for(const [a,b] of def.e){
-    pos.push(...def.v[a],...def.v[b]);
-  }
-  const g=new THREE.BufferGeometry();
-  g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
-  return g;
-}
+/* solid faceted hull from the ship's vertex cloud (all hulls are convex-ish) */
 const _geoCache={};
+function hullGeo(key){
+  if(!_geoCache[key]){
+    const pts=SHIPS[key].v.map(v=>new THREE.Vector3(v[0],v[1],v[2]));
+    const solid=new ConvexGeometry(pts);
+    _geoCache[key]={solid,edges:new THREE.EdgesGeometry(solid,14)};
+  }
+  return _geoCache[key];
+}
 function buildShipMesh(key,color){
-  if(!_geoCache[key])_geoCache[key]=shipGeometry(SHIPS[key]);
+  const g=hullGeo(key);
   const grp=new THREE.Group();
-  const mat=new THREE.LineBasicMaterial({color,transparent:true,opacity:0.95});
-  grp.add(new THREE.LineSegments(_geoCache[key],mat));
+  const mat=new THREE.MeshLambertMaterial({color,flatShading:true});
+  grp.add(new THREE.Mesh(g.solid,mat));
+  grp.add(new THREE.LineSegments(g.edges,
+    new THREE.LineBasicMaterial({color:0x000000,transparent:true,opacity:0.42})));
   grp.userData.mat=mat;
   return grp;
 }
@@ -727,42 +731,37 @@ function glowSprite(color,scale){
   return s;
 }
 
-/* Coriolis station: octagonal drum, docking slot on the planet-facing face */
+/* Coriolis station: solid octagonal drum, dark docking slot on the planet-facing face */
 function buildStation(){
   const R=520,      // rim radius
         F=250,      // face half-size
         D=210;      // half depth
-  const v=[],e=[];
+  const pts=[];
   // front face square (z=-D, faces planet along -Z), rear square rotated 45°
-  const fs=[[-F,-F,-D],[F,-F,-D],[F,F,-D],[-F,F,-D]];
-  const rs=[[0,-F*1.2,D],[F*1.2,0,D],[0,F*1.2,D],[-F*1.2,0,D]];
-  // middle octagon
-  const mid=[];
+  [[-F,-F,-D],[F,-F,-D],[F,F,-D],[-F,F,-D],
+   [0,-F*1.2,D],[F*1.2,0,D],[0,F*1.2,D],[-F*1.2,0,D]].forEach(p=>pts.push(new THREE.Vector3(...p)));
   for(let i=0;i<8;i++){
     const a=(i/8)*Math.PI*2+Math.PI/8;
-    mid.push([Math.cos(a)*R,Math.sin(a)*R,0]);
+    pts.push(new THREE.Vector3(Math.cos(a)*R,Math.sin(a)*R,0));
   }
-  const V=p=>{v.push(p);return v.length-1;};
-  const fi=fs.map(V),ri=rs.map(V),mi=mid.map(V);
-  for(let i=0;i<4;i++){e.push([fi[i],fi[(i+1)%4]]);e.push([ri[i],ri[(i+1)%4]]);}
-  for(let i=0;i<8;i++)e.push([mi[i],mi[(i+1)%8]]);
-  for(let i=0;i<4;i++){ // connect faces to octagon rim
-    e.push([fi[i],mi[(i*2+7)%8]]);e.push([fi[i],mi[i*2]]);
-    e.push([ri[i],mi[(i*2+1)%8]]);e.push([ri[i],mi[(i*2+2)%8]]);
-  }
-  // docking slot (wide rectangle) on front face
-  const sw=95,sh=34,z=-D-1;
-  const s0=V([-sw,-sh,z]),s1=V([sw,-sh,z]),s2=V([sw,sh,z]),s3=V([-sw,sh,z]);
-  e.push([s0,s1],[s1,s2],[s2,s3],[s3,s0]);
-  const pos=[];
-  for(const [a,b] of e)pos.push(...v[a],...v[b]);
-  const g=new THREE.BufferGeometry();
-  g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+  const solid=new ConvexGeometry(pts);
   const grp=new THREE.Group();
-  grp.add(new THREE.LineSegments(g,new THREE.LineBasicMaterial({color:COLORS.station})));
-  // slot beacon glow
-  const beacon=glowSprite(0x7dff9b,110);
-  beacon.position.set(0,0,-D-8);
+  grp.add(new THREE.Mesh(solid,new THREE.MeshLambertMaterial({color:COLORS.station,flatShading:true})));
+  grp.add(new THREE.LineSegments(new THREE.EdgesGeometry(solid,14),
+    new THREE.LineBasicMaterial({color:0x000000,transparent:true,opacity:0.45})));
+  // docking slot: a dark recessed mouth, rimmed in landing-light green
+  const sw=95,sh=34;
+  const slot=new THREE.Mesh(new THREE.BoxGeometry(sw*2,sh*2,10),
+    new THREE.MeshBasicMaterial({color:0x010608}));
+  slot.position.set(0,0,-D-4);
+  grp.add(slot);
+  const rim=new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.PlaneGeometry(sw*2,sh*2)),
+    new THREE.LineBasicMaterial({color:0x7dff9b}));
+  rim.position.set(0,0,-D-9.5);
+  grp.add(rim);
+  const beacon=glowSprite(0x7dff9b,120);
+  beacon.position.set(0,0,-D-16);
   grp.add(beacon);
   grp.userData={R,D,slotW:sw,slotH:sh};
   return grp;
@@ -778,17 +777,20 @@ function buildAsteroid(r){
     const s=seenKeys[k];
     p.setXYZ(i,p.getX(i)*s,p.getY(i)*s,p.getZ(i)*s);
   }
-  const wire=new THREE.WireframeGeometry(geo);
+  geo.computeVertexNormals();
   const grp=new THREE.Group();
-  grp.add(new THREE.LineSegments(wire,new THREE.LineBasicMaterial({color:COLORS.asteroid,transparent:true,opacity:0.7})));
+  grp.add(new THREE.Mesh(geo,new THREE.MeshLambertMaterial({color:COLORS.asteroid,flatShading:true})));
+  grp.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo,20),
+    new THREE.LineBasicMaterial({color:0x000000,transparent:true,opacity:0.3})));
   return grp;
 }
 
 function buildCanister(color){
   const geo=new THREE.CylinderGeometry(3,3,8,6,1,false);
-  const wire=new THREE.WireframeGeometry(geo);
   const grp=new THREE.Group();
-  grp.add(new THREE.LineSegments(wire,new THREE.LineBasicMaterial({color})));
+  grp.add(new THREE.Mesh(geo,new THREE.MeshLambertMaterial({color,flatShading:true})));
+  grp.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo,14),
+    new THREE.LineBasicMaterial({color:0x000000,transparent:true,opacity:0.35})));
   return grp;
 }
 
@@ -806,7 +808,8 @@ function initScene(){
   camera=new THREE.PerspectiveCamera(66,innerWidth/innerHeight,1,2.5e6);
   composer=new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene,camera));
-  bloomPass=new UnrealBloomPass(new THREE.Vector2(innerWidth/2,innerHeight/2),0.9,0.55,0);
+  // solid hulls need a threshold so only lasers, glows and suns bloom
+  bloomPass=new UnrealBloomPass(new THREE.Vector2(innerWidth/2,innerHeight/2),0.85,0.5,0.55);
   composer.addPass(bloomPass);
   // starfield — recentered on camera every frame so it never recedes
   const N=1600,pos=new Float32Array(N*3),col=new Float32Array(N*3);
@@ -841,6 +844,7 @@ function clearWorld(){
   for(const k of ['planet','planetGlow','station','sun','titleShip'])
     if(W[k]){scene.remove(W[k]);W[k]=null;}
   if(W.moons){for(const m of W.moons)scene.remove(m);W.moons=null;}
+  if(W.lights){for(const l of W.lights)scene.remove(l);W.lights=null;}
   for(const t of transients)scene.remove(t.obj);
   transients.length=0;
   for(const n of NPCS)scene.remove(n.obj);
@@ -851,17 +855,13 @@ function clearWorld(){
 function buildSystemScene(sys){
   clearWorld();
   const rng=mulberry32(GALAXY_SEED^(sys.i*131));
-  // planet
+  // planet: flat-shaded faceted globe with an atmosphere haze
   const pr=sys.radius;
   const pg=new THREE.Group();
-  const sphere=new THREE.IcosahedronGeometry(pr,3);
-  pg.add(new THREE.LineSegments(new THREE.WireframeGeometry(sphere),
-    new THREE.LineBasicMaterial({color:sys.color,transparent:true,opacity:0.30})));
-  // coarse inner shell for depth
-  pg.add(new THREE.LineSegments(new THREE.WireframeGeometry(new THREE.IcosahedronGeometry(pr*0.995,1)),
-    new THREE.LineBasicMaterial({color:sys.color,transparent:true,opacity:0.5})));
-  const glow=glowSprite(sys.color,pr*3.1);
-  glow.material.opacity=0.35;
+  pg.add(new THREE.Mesh(new THREE.IcosahedronGeometry(pr,2),
+    new THREE.MeshLambertMaterial({color:sys.color,flatShading:true})));
+  const glow=glowSprite(sys.color,pr*2.9);
+  glow.material.opacity=0.22;
   pg.add(glow);
   // settlement lights on populous high-tech worlds
   if(parseFloat(sys.pop)>4&&sys.tech>6){
@@ -899,8 +899,8 @@ function buildSystemScene(sys){
     const pivot=new THREE.Group();
     const mr=pr*(0.10+rng()*0.10);
     const md=pr*(2.6+m*1.1+rng()*0.6);
-    const moon=new THREE.LineSegments(new THREE.WireframeGeometry(new THREE.IcosahedronGeometry(mr,1)),
-      new THREE.LineBasicMaterial({color:0xb8ccd4,transparent:true,opacity:0.45}));
+    const moon=new THREE.Mesh(new THREE.IcosahedronGeometry(mr,1),
+      new THREE.MeshLambertMaterial({color:0x9fb0ba,flatShading:true}));
     moon.position.set(md,0,0);
     pivot.rotation.y=rng()*6.28;
     pivot.rotation.x=(rng()-0.5)*0.5;
@@ -927,6 +927,15 @@ function buildSystemScene(sys){
   sun.position.copy(sunPos);
   scene.add(sun);
   W.sun=sun;
+  // flat-shaded hulls: hard key from the sun, cool kicker opposite, sky/ground fill
+  // so every facet lands on a different value and the silhouette never goes black
+  const key=new THREE.DirectionalLight(0xfff4e2,2.6);
+  key.position.copy(sun.position);
+  const kick=new THREE.DirectionalLight(0x6fa8d8,0.9);
+  kick.position.copy(sun.position).negate().setY(sun.position.y+3e5);
+  const fill=new THREE.HemisphereLight(0xa8c8dd,0x2a3742,1.0);
+  scene.add(key,kick,fill);
+  W.lights=[key,kick,fill];
   // station — orbits the planet, faces it
   const st=buildStation();
   const sa=rng()*Math.PI*2;
@@ -950,6 +959,12 @@ function buildWitchspaceScene(){
   }
   scene.add(neb);
   W.sun=neb;   // reuse slot so clearWorld tidies it
+  // sickly half-light: witchspace has no sun
+  const key=new THREE.DirectionalLight(0x9fdcb4,0.9);
+  key.position.set(0.4,1,0.3);
+  const fill=new THREE.AmbientLight(0x36584a,0.7);
+  scene.add(key,fill);
+  W.lights=[key,fill];
 }
 
 /* station's slot axis: from station toward planet (world space) */
@@ -1075,18 +1090,23 @@ function stopHyperFX(){
 /* title scene: slowly tumbling Cobra */
 function buildTitleScene(){
   clearWorld();
-  const ship=buildShipMesh('cobra',COLORS.player);
-  ship.scale.setScalar(2.2);
-  ship.position.set(0,0,0);
+  const ship=buildShipMesh('cobra',0x9fb9c4);
+  ship.scale.setScalar(1.5);
+  ship.position.set(0,-34,-40);
   scene.add(ship);
   W.titleShip=ship;
-  camera.position.set(0,42,150);
-  camera.lookAt(0,0,0);
+  camera.position.set(0,30,150);
+  camera.lookAt(0,-24,-40);
   const sun=new THREE.Group();
   sun.add(glowSprite(0xffcf7a,600));
   sun.position.set(-900,300,-1600);
   scene.add(sun);
   W.sun=sun;
+  const key=new THREE.DirectionalLight(0xfff2dd,2.2);
+  key.position.set(-0.6,0.5,0.8);
+  const fill=new THREE.AmbientLight(0x8fb3c9,0.5);
+  scene.add(key,fill);
+  W.lights=[key,fill];
 }
 
 /* ---------------- game state ---------------- */
