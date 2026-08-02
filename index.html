@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#000000">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" type="image/png" href="icon-192.png">
 <title>ELITE 3K</title>
 <style>
 :root{
@@ -547,7 +551,7 @@ function marketFor(sysIdx,day){
   const rng=mulberry32(GALAXY_SEED^(sysIdx*7349)^(Math.floor(day)*911));
   return COMMODITIES.map((c,ci)=>{
     const jitter=(rng()-0.5)*c.base*0.22;
-    let price=(c.base+c.eco*(sys.economy-3.5)*0.9+jitter)*0.4;
+    let price=(c.base+c.eco*(sys.economy-3.5)*1.15+jitter)*0.4;
     price=Math.max(0.4,Math.round(price*10)/10);
     // plentiful where cheap for that economy
     const cheapness=-c.eco*(sys.economy-3.5)/14;   // -1..1, + = cheap here
@@ -653,6 +657,12 @@ const SHIPS={
        [1,2],[2,3],[3,4],[4,5],[5,6],[6,1],
        [7,8],[8,9],[9,10],[10,11],[11,12],[12,7],
        [1,7],[2,8],[3,9],[4,10],[5,11],[6,12]]},
+  ferdelance:{label:'FER-DE-LANCE',hp:70,speed:440,turn:2.0,dmg:7,fireRate:1.4,bounty:[90,180],size:30,
+    v:[[0,1,-30],[-20,0,14],[20,0,14],[0,7,6],[0,-4,8],[-8,5,14],[8,5,14],[-8,-3,14],[8,-3,14]],
+    e:[[0,1],[0,2],[0,3],[0,4],[3,5],[3,6],[1,5],[2,6],[5,6],[1,7],[2,8],[7,8],[4,7],[4,8],[5,7],[6,8]]},
+  constrictor:{label:'CONSTRICTOR',hp:260,speed:460,turn:1.8,dmg:10,fireRate:1.2,bounty:[0,0],size:40,
+    v:[[-10,0,-30],[10,0,-30],[0,3,-18],[-26,0,10],[26,0,10],[0,8,4],[-10,4,16],[10,4,16],[-10,-4,16],[10,-4,16],[0,-5,4]],
+    e:[[0,2],[1,2],[0,3],[1,4],[2,5],[5,6],[5,7],[3,6],[4,7],[6,7],[8,9],[3,8],[4,9],[0,10],[1,10],[10,8],[10,9],[6,8],[7,9]]},
   thargoid:{label:'THARGOID WARSHIP',hp:110,speed:380,turn:1.7,dmg:9,fireRate:1.5,bounty:[220,360],size:42,
     v:[[0,10,0],[0,-8,0],
        [36,0,0],[25.5,0,-25.5],[0,0,-36],[-25.5,0,-25.5],[-36,0,0],[-25.5,0,25.5],[0,0,36],[25.5,0,25.5],
@@ -1081,7 +1091,126 @@ function buildTitleScene(){
 
 /* ---------------- game state ---------------- */
 const NPCS=[];
-const PLAYER_MAX_SPEED=400, PLAYER_TURN=1.65, WARP_MULT=14;
+const WARP_MULT=14;
+
+/* player-flyable hulls (75% trade-in on your current ship) */
+const PSHIPS={
+  adder:     {label:'ADDER',       price:3500,  hold:8,   speed:340, turn:1.35, missiles:2, blurb:'Budget runabout. Cheap, cramped, honest.'},
+  cobra:     {label:'COBRA MK III',price:12000, hold:20,  speed:400, turn:1.65, missiles:4, blurb:'The classic all-rounder every Jameson starts in.'},
+  asp:       {label:'ASP MK II',   price:19000, hold:12,  speed:460, turn:1.8,  missiles:5, blurb:'Naval-surplus fighter. Fast, agile, light hold.'},
+  ferdelance:{label:'FER-DE-LANCE',price:30000, hold:10,  speed:440, turn:2.0,  missiles:6, blurb:'Elite interceptor. Best turn rate money can buy.'},
+  python:    {label:'PYTHON',      price:48000, hold:80,  speed:300, turn:1.0,  missiles:4, blurb:'Serious freight. Slow, tough, deep pockets.'},
+  anaconda:  {label:'ANACONDA',    price:95000, hold:150, speed:240, turn:0.75, missiles:6, blurb:'A cathedral with engines. The endgame hauler.'},
+};
+const curShip=()=>PSHIPS[(G.cmdr&&G.cmdr.ship)||'cobra'];
+const maxSpd=()=>curShip().speed*((G.cmdr&&G.cmdr.storyDone)?1.1:1);
+const maxTurn=()=>curShip().turn;
+const mslMax=()=>curShip().missiles;
+const holdOf=(c,key)=>Math.round(PSHIPS[key||c.ship||'cobra'].hold*(c.equip.cargobay?1.5:1));
+
+function buyShip(key){
+  const c=G.cmdr,s=PSHIPS[key];
+  const net=s.price-Math.round(PSHIPS[c.ship||'cobra'].price*0.75);
+  if(key===c.ship){Snd.err();return;}
+  if(cargoUsed(c)>holdOf(c,key)){msg('HOLD TOO SMALL FOR CURRENT CARGO');Snd.err();return;}
+  if(c.credits<net){Snd.err();return;}
+  c.credits-=net;
+  c.ship=key;
+  c.cargoCap=holdOf(c,key);
+  c.missiles=Math.min(c.missiles,s.missiles);
+  c.boughtShip=true;
+  Snd.cash();Snd.dockChime();
+  G.dockLog.push(`SHIP TRANSFERRED — WELCOME ABOARD YOUR ${s.label}`);
+  checkAchs();
+}
+
+/* ---------------- story: the Constrictor hunt ---------------- */
+const STORY_TEXT=[
+  '',
+  'CH.1 — A naval liaison corners you in the docking lounge: the experimental CONSTRICTOR was stolen from the Xeer shipyards. Its trail leads to %S. Find it.',
+  'CH.2 — Dock workers remember the ship: "fast, ECM-proof, gone in hours." It refuelled and burned hard for %S.',
+  'CH.3 — A wounded bounty hunter croaks the next lead over station comms: the Constrictor razed a convoy near %S.',
+  'CH.4 — Naval intelligence triangulates the signature. It is cornered — %S is the end of the line.',
+  'CH.5 — CONTACT. The Constrictor is in-system at %S. Destroy it. The Navy is paying 5,000 CR.',
+];
+function storyEligible(c){return !c.storyDone&&(c.kills>=32||c.days>=15);}
+function storyPickTarget(c){
+  for(let t=0;t<80;t++){
+    const s=GALAXY[irnd(0,255)];
+    const d=distLY(GALAXY[c.system],s);
+    if(s.i!==c.system&&d>7&&d<19)return s.i;
+  }
+  return (c.system+37)%256;
+}
+function storyAdvance(){
+  const c=G.cmdr;
+  if(!c.story)c.story={stage:0,sys:null,gal:0,killed:false};
+  const st=c.story;
+  if(st.stage>0&&st.gal!==c.galaxy)return;   // trail is cold in another galaxy
+  if(st.stage>=1&&st.stage<=4&&c.system===st.sys){
+    st.stage++;
+    if(st.stage<=5){
+      st.sys=storyPickTarget(c);
+      G.dockLog.push('NAVY CHANNEL: '+STORY_TEXT[st.stage].replace('%S',GALAXY[st.sys].name));
+      Snd.warning();
+    }
+  }else if(st.stage===5&&st.killed){
+    st.stage=6;
+    c.credits+=5000;
+    c.storyDone=true;
+    G.dockLog.push('NAVY CHANNEL: CONSTRICTOR CONFIRMED DESTROYED — 5,000 CR AWARDED.');
+    G.dockLog.push('Navy engineers fit your ship with the prototype’s drive tuning: +10% thrust, permanently.');
+    statsOf(c).earned+=5000;
+    Snd.cash();
+  }
+}
+function storyAccept(){
+  const c=G.cmdr;
+  c.story={stage:1,sys:storyPickTarget(c),gal:c.galaxy,killed:false};
+  G.dockLog.push('NAVY CHANNEL: '+STORY_TEXT[1].replace('%S',GALAXY[c.story.sys].name));
+  Snd.warning();
+}
+
+/* ---------------- stats & achievements ---------------- */
+function statsOf(c){
+  if(!c.stats)c.stats={earned:0,jumps:0,visited:{},scooped:0,missionsDone:0};
+  return c.stats;
+}
+function markVisited(c){
+  const s=statsOf(c);
+  const g=String(c.galaxy||1);
+  if(!s.visited[g])s.visited[g]=[];
+  if(!s.visited[g].includes(c.system))s.visited[g].push(c.system);
+}
+const visitedCount=c=>Object.values(statsOf(c).visited).reduce((a,b)=>a+b.length,0);
+const ACHS=[
+  ['blood','FIRST BLOOD','Destroy a ship',c=>c.kills>=1],
+  ['gun','GUN FOR HIRE','16 kills',c=>c.kills>=16],
+  ['ace','COMPETENT KILLER','128 kills',c=>c.kills>=128],
+  ['elite','E L I T E','6,400 kills',c=>c.kills>=6400],
+  ['dealer','WHEELER DEALER','Earn 1,000 CR',c=>statsOf(c).earned>=1000],
+  ['prince','MERCHANT PRINCE','Earn 100,000 CR',c=>statsOf(c).earned>=100000],
+  ['traveller','FAR TRAVELLER','50 hyperspace jumps',c=>statsOf(c).jumps>=50],
+  ['explorer','EXPLORER','Visit 50 systems',c=>visitedCount(c)>=50],
+  ['drifter','GALACTIC DRIFTER','Reach another galaxy',c=>(c.galaxy||1)>1],
+  ['witch','WITCH HUNTER','Kill a Thargoid',c=>c.thargoidKills>0],
+  ['survivor','WITCHSPACE SURVIVOR','Escape witchspace',c=>c.witchEscapes>0],
+  ['scooper','IRON BELLY','Scoop 10 canisters',c=>statsOf(c).scooped>=10],
+  ['contractor','CONTRACTOR','Complete 10 contracts',c=>statsOf(c).missionsDone>=10],
+  ['shipwright','TRADING UP','Buy a new ship',c=>!!c.boughtShip],
+  ['hunter','CONSTRICTOR HUNTER','Complete the Navy storyline',c=>!!c.storyDone],
+];
+function checkAchs(){
+  const c=G.cmdr;if(!c)return;
+  if(!c.ach)c.ach=[];
+  for(const a of ACHS){
+    if(!c.ach.includes(a[0])&&a[3](c)){
+      c.ach.push(a[0]);
+      msg('ACHIEVEMENT: '+a[1],cssVar('--am'));
+      Snd.dockChime();
+    }
+  }
+}
 const LASERS={
   pulse:   {name:'PULSE LASER',   rate:4.0, dmg:6.0, heat:6.5, color:0xff5470, mine:0.3},
   beam:    {name:'BEAM LASER',    rate:9.0, dmg:2.6, heat:2.3, color:0xffb347, mine:0.3},
@@ -1106,7 +1235,10 @@ const G={
 function newCommander(name){
   return {
     v:1, name:name||'JAMESON', credits:100, days:0, kills:0, legal:0, rep:0,
-    galaxy:1, galArmed:false,
+    galaxy:1, galArmed:false, ship:'cobra', boughtShip:false,
+    story:{stage:0,sys:null,gal:0,killed:false}, storyDone:false,
+    stats:{earned:0,jumps:0,visited:{},scooped:0,missionsDone:0},
+    ach:[], thargoidKills:0, witchEscapes:0,
     system:7, lastStation:7, fuel:7.0,
     cargo:new Array(COMMODITIES.length).fill(0), missionCargo:0, cargoCap:20,
     missiles:3, lasers:{pulse:true}, laser:'pulse',
@@ -1156,9 +1288,12 @@ function enterSystem(idx,arriving){
   dir.y*=0.4;dir.normalize();
   camera.position.copy(dir.multiplyScalar(pr*4+60000));
   camera.lookAt(W.station.position);
-  G.speed=PLAYER_MAX_SPEED*0.3;G.throttle=0.3;
+  G.speed=maxSpd()*0.3;G.throttle=0.3;
   G.warp=false;G.lock.target=null;
   G.spawnT=arriving?3:8;
+  // Constrictor showdown
+  const st=G.cmdr.story;
+  G.bossT=(st&&st.stage===5&&!st.killed&&st.gal===G.cmdr.galaxy&&idx===st.sys)?9:0;
   if(arriving)msg('ARRIVAL: '+G.sys.name+' SYSTEM');
 }
 
@@ -1170,6 +1305,11 @@ function dock(){
   G.cmdr.days=Math.round((G.cmdr.days+0.1)*10)/10;
   G.dockLog.length=0;
   processMissionsOnDock();
+  storyAdvance();
+  if(G.cmdr.story&&G.cmdr.story.stage===0&&storyEligible(G.cmdr))
+    G.dockLog.push('NAVY CHANNEL: a liaison officer wants a word — see the BBS.');
+  markVisited(G.cmdr);
+  checkAchs();
   G.mkt=marketFor(G.cmdr.system,G.cmdr.days);
   saveTo('autosave');
   Snd.dockChime();Snd.engine(0);
@@ -1187,7 +1327,7 @@ function undock(){
   camera.position.copy(_v2).addScaledVector(axis,300);
   _m1.lookAt(camera.position,_v3.copy(camera.position).addScaledVector(axis,1000),UP);
   camera.quaternion.setFromRotationMatrix(_m1);
-  G.speed=PLAYER_MAX_SPEED*0.35;G.throttle=0.35;
+  G.speed=maxSpd()*0.35;G.throttle=0.35;
   G.spawnT=10;G.grace=40;
   msg('LAUNCH CLEARED — '+G.sys.name+' STATION');
   updateHud(true);
@@ -1222,10 +1362,12 @@ function updateAutodock(dt){
 /* ---------------- missions ---------------- */
 function processMissionsOnDock(){
   const c=G.cmdr;
+  const S=statsOf(c);
+  const done=(pay)=>{S.earned+=pay;S.missionsDone++;};
   for(let i=c.missions.length-1;i>=0;i--){
     const m=c.missions[i];
     if(m.type==='bounty'&&m.progress>=m.kills){
-      c.credits+=m.reward;c.rep=(c.rep||0)+1;
+      c.credits+=m.reward;c.rep=(c.rep||0)+1;done(m.reward);
       G.dockLog.push(`BOUNTY CONTRACT COMPLETE — ${fmtCr(m.reward)} PAID`);
       c.missions.splice(i,1);Snd.cash();continue;
     }
@@ -1235,7 +1377,7 @@ function processMissionsOnDock(){
         pay+=m.bonus;
         G.dockLog.push(`PASSENGER DELIGHTED BY SWIFT PASSAGE — BONUS ${fmtCr(m.bonus)}`);
       }
-      c.credits+=pay;c.rep=(c.rep||0)+1;
+      c.credits+=pay;c.rep=(c.rep||0)+1;done(pay);
       if(m.type==='cargo'||m.type==='vip')c.missionCargo=Math.max(0,c.missionCargo-m.qty);
       G.dockLog.push(`${m.type==='data'?'DATA DELIVERED':m.type==='vip'?'PASSENGER DISEMBARKED':'FREIGHT DELIVERED'} — ${fmtCr(m.reward)} PAID`);
       c.missions.splice(i,1);Snd.cash();continue;
@@ -1243,7 +1385,7 @@ function processMissionsOnDock(){
     if(m.type==='hop'&&m.dests[m.stage]===c.system){
       m.stage++;
       if(m.stage>=m.dests.length){
-        c.credits+=m.reward;c.rep=(c.rep||0)+2;
+        c.credits+=m.reward;c.rep=(c.rep||0)+2;done(m.reward);
         G.dockLog.push(`CIRCUIT COMPLETE — ${fmtCr(m.reward)} PAID`);
         c.missions.splice(i,1);Snd.cash();
       }else{
@@ -1286,16 +1428,17 @@ function sellGood(ci,qty){
   qty=Math.min(qty,c.cargo[ci]);
   if(qty<=0){Snd.err();return;}
   c.credits+=qty*row.price;c.cargo[ci]-=qty;row.qty+=qty;
+  statsOf(c).earned+=qty*row.price;
   if(com.illegal&&Math.random()<0.3){c.legal+=4;G.dockLog.push('CONTRABAND TRANSACTION LOGGED BY STATION POLICE');}
   Snd.cash();
 }
 
 /* ---------------- equipment ---------------- */
 const EQUIP_LIST=[
-  {id:'missile', name:'HOMING MISSILE', price:30, tech:1, desc:'Max 4. Lock target, then launch.',
-    owned:c=>c.missiles>=4?'FULL':null, can:c=>c.missiles<4, buy:c=>c.missiles++},
-  {id:'cargobay',name:'CARGO BAY EXPANSION', price:400, tech:2, desc:'Hold capacity 20t → 35t.',
-    owned:c=>c.equip.cargobay?'FITTED':null, can:c=>!c.equip.cargobay, buy:c=>{c.equip.cargobay=true;c.cargoCap=35;}},
+  {id:'missile', name:'HOMING MISSILE', price:30, tech:1, desc:'Lock target, then launch. Capacity depends on hull.',
+    owned:c=>c.missiles>=mslMax()?'FULL':null, can:c=>c.missiles<mslMax(), buy:c=>c.missiles++},
+  {id:'cargobay',name:'CARGO BAY EXPANSION', price:400, tech:2, desc:'Hold capacity +50% for this hull.',
+    owned:c=>c.equip.cargobay?'FITTED':null, can:c=>!c.equip.cargobay, buy:c=>{c.equip.cargobay=true;c.cargoCap=holdOf(c);}},
   {id:'ecm',     name:'E.C.M. SYSTEM', price:600, tech:3, desc:'Destroys incoming missiles. Costs energy.',
     owned:c=>c.equip.ecm?'FITTED':null, can:c=>!c.equip.ecm, buy:c=>c.equip.ecm=true},
   {id:'scoop',   name:'FUEL SCOOP', price:525, tech:4, desc:'Scoop cargo canisters, ore and solar fuel.',
@@ -1374,8 +1517,16 @@ function killNPC(n,byPlayer){
   if(byPlayer){
     if(n.kind==='pirate'){
       G.cmdr.kills++;G.cmdr.credits+=n.bounty;
-      msg(`TARGET DESTROYED — BOUNTY ${fmtCr(n.bounty)}`);
+      statsOf(G.cmdr).earned+=n.bounty;
+      if(n.key==='thargoid')G.cmdr.thargoidKills=(G.cmdr.thargoidKills||0)+1;
+      if(n.key==='constrictor'){
+        if(G.cmdr.story)G.cmdr.story.killed=true;
+        msg('CONSTRICTOR DESTROYED — REPORT TO ANY STATION',cssVar('--am'));
+      }else{
+        msg(`TARGET DESTROYED — BOUNTY ${fmtCr(n.bounty)}`);
+      }
       for(const m of G.cmdr.missions)if(m.type==='bounty')m.progress=(m.progress||0)+1;
+      checkAchs();
     }else if(n.kind==='trader'){
       G.cmdr.kills++;G.cmdr.legal+=20;
       msg('CLEAN VESSEL DESTROYED — POLICE ALERTED',cssVar('--rd'));
@@ -1426,9 +1577,10 @@ function updateNPCs(dt,wdt){
       if(n.drift)n.obj.position.addScaledVector(n.drift,wdt);
       // scooping / collision with player
       if((n.kind==='canister'||n.kind==='splinter')&&dist<75){
-        if(G.cmdr.equip.scoop&&cargoUsed(G.cmdr)<G.cmdr.cargoCap&&G.speed<PLAYER_MAX_SPEED*0.75){
+        if(G.cmdr.equip.scoop&&cargoUsed(G.cmdr)<G.cmdr.cargoCap&&G.speed<maxSpd()*0.75){
           const ci=n.kind==='splinter'?12:n.ci;   // splinters -> minerals
           G.cmdr.cargo[ci]++;
+          statsOf(G.cmdr).scooped++;
           msg('SCOOPED: 1T '+COMMODITIES[ci].name);
           Snd.scoop();
         }else{
@@ -1493,7 +1645,7 @@ function updateNPCs(dt,wdt){
         const aim=_v2.dot(_v3);
         if(n.fireT<0&&dist<5200&&aim>0.965){
           n.fireT=n.def.fireRate*rnd(0.8,1.3);
-          const hitChance=clamp(0.55-(dist/5200)*0.3-(G.speed/PLAYER_MAX_SPEED)*0.15+aim*0.25,0.1,0.85);
+          const hitChance=clamp(0.55-(dist/5200)*0.3-(G.speed/maxSpd())*0.15+aim*0.25,0.1,0.85);
           const from=n.obj.position;
           if(Math.random()<hitChance){
             spawnTracer(from,_v4.copy(ppos).add(_v2.set(rnd(-8,8),rnd(-8,8),rnd(-8,8))),0xff5470);
@@ -1838,6 +1990,7 @@ function updateHyperspace(dt){
       const c=G.cmdr;
       G.hyper=null;
       G.mode='flight';
+      statsOf(c).jumps++;
       if(h.galactic){
         c.equip.galdrive=false;c.galArmed=false;
         c.galaxy=(c.galaxy%8)+1;
@@ -1846,12 +1999,15 @@ function updateHyperspace(dt){
         c.target=null;G.witch=null;
         enterSystem(c.system,true);
         msg(`INTERGALACTIC TRANSIT COMPLETE — GALAXY ${c.galaxy}`,cssVar('--am'));
+        checkAchs();
         return;
       }
       if(h.escape){
         G.witch=null;
+        c.witchEscapes=(c.witchEscapes||0)+1;
         c.days=Math.round((c.days+0.5)*10)/10;
         enterSystem(h.target,true);
+        checkAchs();
         return;
       }
       const d=distLY(GALAXY[c.system],GALAXY[h.target]);
@@ -1880,7 +2036,7 @@ function enterWitchspace(target){
   G.sys={name:'WITCHSPACE',i:-1,radius:0,economy:7,gov:0,tech:0,pop:'0',desc:'',color:0x7dff9b};
   buildWitchspaceScene();
   camera.position.set(0,0,0);
-  G.speed=PLAYER_MAX_SPEED*0.3;G.throttle=0.3;
+  G.speed=maxSpd()*0.3;G.throttle=0.3;
   G.warp=false;G.lock.target=null;G.spawnT=15;
   const n=2+(Math.random()<0.35?1:0);
   for(let i=0;i<n;i++){
@@ -1900,15 +2056,26 @@ function updateFlight(dt){
   if(G.grace>0)G.grace-=dt;
   // arrival grace also ends early if the player opens fire
   if(G.fireHeld)G.grace=0;
+  // the Constrictor uncloaks
+  if(G.bossT>0){
+    G.bossT-=dt;
+    if(G.bossT<=0){
+      npcForward({obj:camera},_v1);
+      const p=_v1.multiplyScalar(8500).add(camera.position).clone();
+      spawnNPC('pirate','constrictor',p,{state:'attack',hasEcm:true,color:0xe070ff});
+      msg('WARNING: CONSTRICTOR SIGNATURE DETECTED',cssVar('--rd'));
+      Snd.warning();
+    }
+  }
   // steering
   const iv=G.invertY?-1:1;
-  camera.rotateX(G.pitch*iv*PLAYER_TURN*dt);
-  camera.rotateZ(-G.roll*PLAYER_TURN*1.15*dt);
+  camera.rotateX(G.pitch*iv*maxTurn()*dt);
+  camera.rotateZ(-G.roll*maxTurn()*1.15*dt);
   // speed
-  const targetSpeed=G.throttle*PLAYER_MAX_SPEED;
+  const targetSpeed=G.throttle*maxSpd();
   G.speed+=clamp(targetSpeed-G.speed,-220*dt,160*dt);
   camera.position.addScaledVector(npcForward({obj:camera},_v1),G.speed*wdt);
-  Snd.engine(G.speed/PLAYER_MAX_SPEED+(G.warp?0.4:0));
+  Snd.engine(G.speed/maxSpd()+(G.warp?0.4:0));
   // world motion
   if(W.station)W.station.rotateZ(0.09*wdt);
   if(W.planet)W.planet.rotation.y+=0.004*wdt;
@@ -1919,7 +2086,7 @@ function updateFlight(dt){
   if(pd<pr*1.05){
     _v1.copy(camera.position).normalize();
     camera.position.copy(_v1.multiplyScalar(pr*1.07));
-    G.speed=PLAYER_MAX_SPEED*0.15;G.throttle=0.15;
+    G.speed=maxSpd()*0.15;G.throttle=0.15;
     damagePlayer(26,_v2.copy(camera.position).normalize().negate());
     msg('ATMOSPHERIC IMPACT — PULL UP',cssVar('--rd'));
   }
@@ -1939,9 +2106,9 @@ function updateFlight(dt){
     if(nearHull){
       if(along>0&&lateral<170){
         // inside the docking corridor at the face
-        if(entering&&G.speed<PLAYER_MAX_SPEED*0.5){dock();return;}
+        if(entering&&G.speed<maxSpd()*0.5){dock();return;}
         camera.position.copy(W.station.position).addScaledVector(axis,stD+320).add(_v3);
-        G.speed=PLAYER_MAX_SPEED*0.1;G.throttle=Math.min(G.throttle,0.15);
+        G.speed=maxSpd()*0.1;G.throttle=Math.min(G.throttle,0.15);
         damagePlayer(8,_v4);
         msg('TOO FAST — REDUCE APPROACH SPEED',cssVar('--am'));
       }else{
@@ -1952,7 +2119,7 @@ function updateFlight(dt){
           _v2.normalize();
           camera.position.copy(W.station.position).addScaledVector(_v2,stR+160);
         }
-        G.speed=PLAYER_MAX_SPEED*0.12;G.throttle=Math.min(G.throttle,0.2);
+        G.speed=maxSpd()*0.12;G.throttle=Math.min(G.throttle,0.2);
         damagePlayer(18,_v2.normalize().negate());
         msg('STATION COLLISION',cssVar('--rd'));
       }
@@ -2010,7 +2177,7 @@ function setBar(id,frac,warnLow){
 }
 function updateHud(force){
   const c=G.cmdr;if(!c)return;
-  setBar('gSpeed',G.speed/PLAYER_MAX_SPEED);
+  setBar('gSpeed',G.speed/maxSpd());
   setBar('gFuel',c.fuel/7);
   setBar('gLaser',G.laserTemp/100);
   const pd=camera.position.length(),pr=G.sys?G.sys.radius:1;
@@ -2023,10 +2190,11 @@ function updateHud(force){
     const f=clamp(G.energy/100-i,0,1);
     segs[3-i].firstElementChild.style.width=(f*100).toFixed(0)+'%';
   }
-  // missiles
+  // missiles (pylon count depends on hull)
   const mr=$('mslrow');
-  if(mr.children.length!==4){mr.innerHTML='<span></span><span></span><span></span><span></span>';}
-  for(let i=0;i<4;i++){
+  const mm=mslMax();
+  if(mr.children.length!==mm)mr.innerHTML='<span></span>'.repeat(mm);
+  for(let i=0;i<mm;i++){
     const s=mr.children[i];
     s.className=i<c.missiles?(G.lock.target&&i===c.missiles-1?'armed':''):'empty';
   }
@@ -2169,10 +2337,28 @@ function renderTab(tab){
       sel=`<h3>ACTIVE LASER</h3><div class="note">`+owned.map(k=>
         `<button class="tbtn" data-las="${k}" style="${k===c.laser?'color:var(--gn);border-color:var(--gn)':''}">${LASERS[k].name}</button> `).join('')+`</div>`;
     }
-    p.innerHTML=`${log}<h3>SHIP OUTFITTING — TECH LEVEL ${G.sys.tech}</h3>${rows}${sel}`;
+    // shipyard at high-tech worlds
+    let yard='';
+    if(G.sys.tech>=8){
+      const tradeIn=Math.round(PSHIPS[c.ship||'cobra'].price*0.75);
+      yard=`<h3 style="margin-top:18px">SHIPYARD — TRADE-IN VALUE ${fmtCr(tradeIn)}</h3>`;
+      for(const [key,s] of Object.entries(PSHIPS)){
+        const mine=key===(c.ship||'cobra');
+        const net=s.price-tradeIn;
+        const canFit=cargoUsed(c)<=Math.round(s.hold*(c.equip.cargobay?1.5:1));
+        yard+=`<div class="eqrow"><div class="nm">${s.label}<small>${s.blurb} — ${s.hold}t hold · speed ${s.speed} · ${s.missiles} pylons</small></div>
+          ${mine?'<span class="owned">YOUR SHIP</span>'
+          :`<span class="pr">${net>=0?'NET '+net+' CR':'CREDIT '+(-net)+' CR'}</span>
+            <button class="tbtn" data-ship="${key}" ${(c.credits<net||!canFit)?'disabled':''}>${net>=0?'BUY':'TRADE'}</button>`}</div>`;
+      }
+    }else{
+      yard=`<div class="note" style="margin-top:14px">Shipyards operate at TECH 8+ worlds.</div>`;
+    }
+    p.innerHTML=`${log}<h3>SHIP OUTFITTING — TECH LEVEL ${G.sys.tech}</h3>${rows}${sel}${yard}`;
     p.querySelectorAll('[data-eq]').forEach(b=>b.onclick=()=>{buyEquip(EQUIP_LIST.find(e=>e.id===b.dataset.eq));renderTab('equip');});
     const fb=p.querySelector('[data-fuel]');if(fb)fb.onclick=()=>{buyFuel();renderTab('equip');};
     p.querySelectorAll('[data-las]').forEach(b=>b.onclick=()=>{c.laser=b.dataset.las;Snd.click();renderTab('equip');});
+    p.querySelectorAll('[data-ship]').forEach(b=>b.onclick=()=>{buyShip(b.dataset.ship);renderTab('equip');});
   }
   else if(tab==='chart'){
     const c=G.cmdr;
@@ -2181,10 +2367,12 @@ function renderTab(tab){
       :'';
     p.innerHTML=`${log}<h3>NAVIGATION CHARTS — GALAXY ${c.galaxy||1}</h3>
       <div class="note"><button class="tbtn" id="chmode">${chartMode==='local'?'VIEW: LOCAL':'VIEW: GALAXY'}</button>
+      <button class="tbtn" id="chroutes">TRADE ROUTES</button>
       &nbsp; FUEL RANGE ${c.fuel.toFixed(1)} LY &nbsp;·&nbsp; TAP A SYSTEM${gal}</div>
       ${c.galArmed?'<div class="note" style="color:var(--am)">Galactic hyperdrive armed — the next HYPER engage in flight jumps to galaxy '+((c.galaxy%8)+1)+'. One use only.</div>':''}
-      <canvas id="chart"></canvas><div id="sysinfo"></div>`;
+      <canvas id="chart"></canvas><div id="routes"></div><div id="sysinfo"></div>`;
     p.querySelector('#chmode').onclick=()=>{chartMode=chartMode==='local'?'galaxy':'local';renderTab('chart');Snd.click();};
+    p.querySelector('#chroutes').onclick=()=>{renderRoutes();Snd.click();};
     const ga=p.querySelector('#galarm');
     if(ga)ga.onclick=()=>{c.galArmed=!c.galArmed;Snd.lockOn();renderTab('chart');};
     sizeChart();drawChart();renderSysInfo();
@@ -2206,8 +2394,26 @@ function renderTab(tab){
     const av=avail.length?avail.map((m,i)=>
       `<div class="msrow">${m.text}<br><span class="rw">${fmtCr(m.reward)}</span>
        &nbsp;<button class="tbtn" data-ms="${i}">ACCEPT</button></div>`).join(''):'<div class="note">No contracts posted today.</div>';
+    // Navy story channel
+    let navy='';
+    const st=c.story||{stage:0};
+    if(st.stage===0&&storyEligible(c)){
+      navy=`<div class="msrow" style="border-color:var(--am)">
+        <span style="color:var(--am)">NAVY CHANNEL — PRIORITY</span><br>
+        A naval liaison offers you a classified contract: hunt down the stolen CONSTRICTOR prototype.
+        The Navy pays <span class="rw">5,000.0 CR</span> on confirmed destruction.
+        <br><button class="tbtn" id="navyAccept">ACCEPT COMMISSION</button></div>`;
+    }else if(st.stage>=1&&st.stage<=5&&!c.storyDone){
+      const where=st.gal===c.galaxy?GALAXY[st.sys].name+' (GALAXY '+st.gal+')':'GALAXY '+st.gal+' — return there to pick up the trail';
+      navy=`<div class="msrow" style="border-color:var(--am)">
+        <span style="color:var(--am)">NAVY CHANNEL — CHAPTER ${st.stage} OF 5</span><br>
+        ${STORY_TEXT[st.stage].replace('%S',GALAXY[st.sys]?GALAXY[st.sys].name:'?')}<br>
+        ${st.stage===5?(st.killed?'Target destroyed — dock anywhere to collect.':'The target is in-system at '+where+'. Good hunting.'):'NEXT LEAD: '+where}</div>`;
+    }
     p.innerHTML=`${log}<h3>BULLETIN BOARD — CONTRACTS</h3>
-      <div class="note">STANDING: ${repName(c.rep||0)} — better reputations attract better-paying work.</div>${av}${act}`;
+      <div class="note">STANDING: ${repName(c.rep||0)} — better reputations attract better-paying work.</div>${navy}${av}${act}`;
+    const na=p.querySelector('#navyAccept');
+    if(na)na.onclick=()=>{storyAccept();Snd.cash();renderTab('missions');};
     p.querySelectorAll('[data-ms]').forEach(b=>b.onclick=()=>{
       if(acceptMission(avail[+b.dataset.ms]))renderTab('missions');
     });
@@ -2229,10 +2435,10 @@ function renderTab(tab){
         <dt>GALAXY</dt><dd>${c.galaxy||1} OF 8</dd>
         <dt>LEGAL STATUS</dt><dd>${legalName(c.legal)}</dd>
         <dt>CREDITS</dt><dd>${fmtCr(c.credits)}</dd>
-        <dt>SHIP</dt><dd>COBRA MK III</dd>
+        <dt>SHIP</dt><dd>${PSHIPS[c.ship||'cobra'].label}${c.storyDone?' <span class="owned">(NAVY-TUNED +10%)</span>':''}</dd>
         <dt>FUEL</dt><dd>${c.fuel.toFixed(1)} / 7.0 LY</dd>
         <dt>HOLD</dt><dd>${cargoUsed(c)} / ${c.cargoCap} T</dd>
-        <dt>MISSILES</dt><dd>${c.missiles} / 4</dd>
+        <dt>MISSILES</dt><dd>${c.missiles} / ${mslMax()}</dd>
         <dt>PRESENT SYSTEM</dt><dd>${G.sys.name}</dd>
         <dt>GAME CLOCK</dt><dd>DAY ${Math.floor(c.days)}</dd>
         <dt>EQUIPMENT</dt><dd>${eq.join('<br>')||'—'}</dd>
@@ -2240,6 +2446,20 @@ function renderTab(tab){
       <h3 style="margin-top:18px">PLANET DATA</h3>
       <div class="note">${G.sys.desc}<br>
       ECONOMY: ${ECONOMIES[G.sys.economy]} · GOVERNMENT: ${GOVERNMENTS[G.sys.gov]} · TECH ${G.sys.tech} · POP ${G.sys.pop} BN</div>
+      <h3 style="margin-top:18px">CAREER RECORDS</h3>
+      <div class="statgrid">
+        <dt>TOTAL EARNED</dt><dd>${fmtCr(statsOf(c).earned)}</dd>
+        <dt>HYPERSPACE JUMPS</dt><dd>${statsOf(c).jumps}</dd>
+        <dt>SYSTEMS VISITED</dt><dd>${visitedCount(c)}</dd>
+        <dt>CANISTERS SCOOPED</dt><dd>${statsOf(c).scooped}</dd>
+        <dt>CONTRACTS DONE</dt><dd>${statsOf(c).missionsDone}</dd>
+        <dt>THARGOID KILLS</dt><dd>${c.thargoidKills||0}</dd>
+      </div>
+      <h3 style="margin-top:18px">ACHIEVEMENTS — ${(c.ach||[]).length}/${ACHS.length}</h3>
+      <div>${ACHS.map(a=>{
+        const got=(c.ach||[]).includes(a[0]);
+        return `<div class="eqrow" style="${got?'':'opacity:.38'}"><div class="nm">${got?'★':'☆'} ${a[1]}<small>${a[2]}</small></div>${got?'<span class="owned">EARNED</span>':''}</div>`;
+      }).join('')}</div>
       <h3 style="margin-top:18px">SETTINGS</h3>
       <div class="togglerow"><span>SOUND</span><button class="tbtn" id="tgSnd">${Snd.muted?'OFF':'ON'}</button></div>
       <div class="togglerow"><span>MUSIC</span><button class="tbtn" id="tgMus">${Music.on?'ON':'OFF'}</button></div>
@@ -2296,6 +2516,10 @@ function renderTab(tab){
 function applyLoadedCommander(o){
   o.galaxy=o.galaxy||1;o.rep=o.rep||0;o.galArmed=o.galArmed||false;
   if(o.equip.galdrive===undefined)o.equip.galdrive=false;
+  o.ship=o.ship||'cobra';
+  if(!o.story)o.story={stage:0,sys:null,gal:0,killed:false};
+  if(!o.stats)o.stats={earned:0,jumps:0,visited:{},scooped:0,missionsDone:0};
+  if(!o.ach)o.ach=[];
   if(CURRENT_GALAXY!==o.galaxy)buildGalaxy(o.galaxy);
   G.cmdr=o;
   G.sys=GALAXY[o.system];
@@ -2303,6 +2527,35 @@ function applyLoadedCommander(o){
   dock();
   G.dockLog.unshift(`COMMANDER ${o.name} RESTORED`);
   renderTab('status');
+}
+
+/* trade-route analyzer: best single-leg profit within fuel range */
+function renderRoutes(){
+  const el=$('routes');if(!el)return;
+  const c=G.cmdr,cur=GALAXY[c.system];
+  const out=[];
+  for(const s of GALAXY){
+    if(s.i===c.system)continue;
+    const d=distLY(cur,s);
+    if(d>c.fuel)continue;
+    const there=marketFor(s.i,c.days+1+d*0.3);
+    let best=null;
+    for(const row of G.mkt){
+      if(row.qty<=0)continue;
+      const profit=there[row.ci].price-row.price;
+      if(profit>0.5&&(!best||profit>best.profit))best={ci:row.ci,profit};
+    }
+    if(best)out.push({s,d,...best});
+  }
+  out.sort((a,b)=>b.profit-a.profit);
+  if(!out.length){el.innerHTML='<div class="note">No profitable routes within fuel range — refuel or relocate.</div>';return;}
+  el.innerHTML='<h3>BEST ROUTES FROM '+cur.name+'</h3>'+out.slice(0,6).map(r=>
+    `<div class="msrow" data-rt="${r.s.i}" style="cursor:pointer">${r.s.name} — ${r.d.toFixed(1)} LY · buy <b>${COMMODITIES[r.ci].name}</b>
+     → <span class="rw">+${r.profit.toFixed(1)} CR/T</span> (est.)</div>`).join('')+
+    '<div class="note">Estimates use current prices and arrival-day markets. Tap a route to select it.</div>';
+  el.querySelectorAll('[data-rt]').forEach(b=>b.onclick=()=>{
+    chartSel=+b.dataset.rt;Snd.click();drawChart();renderSysInfo();
+  });
 }
 
 /* ---------------- galaxy chart ---------------- */
@@ -2431,7 +2684,9 @@ function showHelp(fromPause){
   Set hyperspace course in station CHARTS. Trade goods between economies; agricultural worlds
   sell food &amp; furs cheap, industrial worlds sell computers &amp; machinery cheap. Watch your legal status.
   Rarely a jump misfires into <b>witchspace</b> — fight off the Thargoids, then engage HYPER again to escape.
-  A Galactic Hyperdrive (tech-10 shipyards) armed in CHARTS jumps you to the next of 8 galaxies.</p>
+  A Galactic Hyperdrive (tech-10 shipyards) armed in CHARTS jumps you to the next of 8 galaxies.
+  Tech-8+ worlds sell <b>ships</b> (75% trade-in) — from the humble Adder to the mighty Anaconda.
+  Use TRADE ROUTES in CHARTS to find profit, and watch the BBS for the Navy's Constrictor commission.</p>
   <div class="btnrow"><button class="nbtn small" id="ovClose">${fromPause?'RESUME':'CLOSE'}</button></div>`);
   $('ovClose').onclick=()=>{hideOverlay();if(fromPause)G.paused=false;};
 }
@@ -2774,7 +3029,7 @@ document.addEventListener('visibilitychange',()=>{
 /* ---------------- boot ---------------- */
 // debug / modding hooks
 Object.assign(window,{G,W,SHIPS,LASERS,get NPCS(){return NPCS;},GALAXY,camera:()=>camera,
-  DBG:{spawnNPC,damageNPC,killNPC,removeNPC,dock,enterSystem,enterWitchspace,startHyperspace,Music,buildGalaxy}});
+  DBG:{spawnNPC,damageNPC,killNPC,removeNPC,dock,enterSystem,enterWitchspace,startHyperspace,Music,buildGalaxy,marketFor,distLY,PSHIPS,storyAccept,checkAchs}});
 buildGalaxy();
 initScene();
 initInput();
@@ -2783,6 +3038,9 @@ document.querySelectorAll('#tabs button').forEach(b=>b.addEventListener('click',
 toTitle();
 fitHudCanvases();
 requestAnimationFrame(loop);
+// PWA: offline cache + install support (production only — cache-first would mask local dev edits)
+if('serviceWorker' in navigator&&location.protocol==='https:')
+  navigator.serviceWorker.register('./sw.js').catch(()=>{});
 
 </script>
 </body>
