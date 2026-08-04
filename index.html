@@ -37,9 +37,9 @@ canvas#gl{position:fixed;inset:0;width:100%;height:100%;display:block;}
   width:102px;height:102px;opacity:.85;}
 #crosshair::before,#crosshair::after{content:'';position:absolute;background:var(--cy);box-shadow:var(--glow);}
 #crosshair::before{left:50%;top:0;width:2px;height:100%;transform:translateX(-1px);
-  -webkit-mask:linear-gradient(#000 0 28%,transparent 28% 72%,#000 72%);mask:linear-gradient(#000 0 28%,transparent 28% 72%,#000 72%);}
+  -webkit-mask:linear-gradient(#000 0 24%,transparent 24% 76%,#000 76%);mask:linear-gradient(#000 0 24%,transparent 24% 76%,#000 76%);}
 #crosshair::after{top:50%;left:0;height:2px;width:100%;transform:translateY(-1px);
-  -webkit-mask:linear-gradient(90deg,#000 0 28%,transparent 28% 72%,#000 72%);mask:linear-gradient(90deg,#000 0 28%,transparent 28% 72%,#000 72%);}
+  -webkit-mask:linear-gradient(90deg,#000 0 24%,transparent 24% 76%,#000 76%);mask:linear-gradient(90deg,#000 0 24%,transparent 24% 76%,#000 76%);}
 #lockbox{position:absolute;left:50%;top:50%;width:52px;height:52px;transform:translate(-50%,-50%);
   border:1px solid var(--rd);box-shadow:0 0 10px rgba(255,84,112,.7);opacity:0;}
 #lockbox.locking{opacity:.6;border-style:dashed;border-color:var(--am);}
@@ -171,6 +171,7 @@ table.mkt .tbtn[disabled]{opacity:.25;}
 #sysinfo b{color:var(--am);letter-spacing:.15em;}
 .msrow{border:1px solid rgba(30,107,116,.5);padding:10px;margin-bottom:10px;font-size:clamp(11px,1.8vmin,13px);line-height:1.7;}
 .msrow .rw{color:var(--am);}
+.danger{color:var(--rd);}
 .statgrid{display:grid;grid-template-columns:auto 1fr;gap:5px 16px;font-size:clamp(11px,1.9vmin,14px);line-height:1.7;}
 .statgrid dt{color:var(--cyd);letter-spacing:.1em;}
 .togglerow{display:flex;justify-content:space-between;align-items:center;padding:8px 4px;border-bottom:1px solid rgba(30,107,116,.35);font-size:clamp(11px,1.8vmin,13px);}
@@ -300,6 +301,14 @@ const pick=arr=>arr[Math.floor(Math.random()*arr.length)];
 const fmtCr=c=>c.toFixed(1)+' CR';
 const $=id=>document.getElementById(id);
 
+/* localStorage that never throws — Safari private mode and quota limits
+   would otherwise take down whatever call site was mid-flight */
+const LS={
+  get(k){try{return localStorage.getItem(k);}catch(e){return null;}},
+  set(k,v){try{localStorage.setItem(k,v);return true;}catch(e){return false;}},
+  del(k){try{localStorage.removeItem(k);}catch(e){}},
+};
+
 function mulberry32(seed){
   let a=seed>>>0;
   return function(){
@@ -319,7 +328,7 @@ const FWD=new THREE.Vector3(0,0,-1),UP=new THREE.Vector3(0,1,0);
 /* ---------------- audio (procedural WebAudio) ---------------- */
 const Snd={
   ctx:null,master:null,engOsc:null,engGain:null,engNoise:null,
-  muted:localStorage.getItem('e3k.mute')==='1',
+  muted:LS.get('e3k.mute')==='1',
   ensure(){
     if(this.ctx)return;
     try{
@@ -337,7 +346,7 @@ const Snd={
   },
   resume(){if(this.ctx&&this.ctx.state==='suspended')this.ctx.resume();},
   setMute(m){
-    this.muted=m;localStorage.setItem('e3k.mute',m?'1':'0');
+    this.muted=m;LS.set('e3k.mute',m?'1':'0');
     if(this.master)this.master.gain.value=m?0:0.5;
   },
   engine(frac,combat){
@@ -357,14 +366,26 @@ const Snd={
     o.connect(g);g.connect(this.master);
     o.start(t);o.stop(t+dur+0.02);
   },
+  _noiseBuf:null,
+  /* One two-second bank of white noise, generated once and replayed at an
+     offset. Filling a fresh buffer per call meant every large explosion ran a
+     ~58k-iteration loop and threw the result away. */
+  noiseBuffer(){
+    if(!this._noiseBuf){
+      const n=Math.floor(this.ctx.sampleRate*2);
+      this._noiseBuf=this.ctx.createBuffer(1,n,this.ctx.sampleRate);
+      const d=this._noiseBuf.getChannelData(0);
+      for(let i=0;i<n;i++)d[i]=Math.random()*2-1;
+    }
+    return this._noiseBuf;
+  },
   noise(dur,vol=0.3,fStart=3000,fEnd=200){
     if(!this.ctx)return;
     const t=this.ctx.currentTime;
-    const n=Math.floor(this.ctx.sampleRate*dur);
-    const buf=this.ctx.createBuffer(1,n,this.ctx.sampleRate);
-    const d=buf.getChannelData(0);
-    for(let i=0;i<n;i++)d[i]=Math.random()*2-1;
+    const buf=this.noiseBuffer();
     const src=this.ctx.createBufferSource();src.buffer=buf;
+    // start at a random offset so repeated hits never sound identical
+    const off=Math.random()*Math.max(0,buf.duration-dur);
     const f=this.ctx.createBiquadFilter();f.type='lowpass';
     f.frequency.setValueAtTime(fStart,t);
     f.frequency.exponentialRampToValueAtTime(Math.max(40,fEnd),t+dur);
@@ -372,7 +393,7 @@ const Snd={
     g.gain.setValueAtTime(vol,t);
     g.gain.exponentialRampToValueAtTime(0.001,t+dur);
     src.connect(f);f.connect(g);g.connect(this.master);
-    src.start(t);
+    src.start(t,off,dur);
   },
   laser(kind){
     if(kind==='mining')this.tone(300,0.15,'sawtooth',0.15,-200);
@@ -408,7 +429,7 @@ const Snd={
    drifting detuned pads + echo, filter opens in combat,
    gentle arpeggio pings while docked. zero assets.          */
 const Music={
-  on:localStorage.getItem('e3k.music')!=='0',
+  on:LS.get('e3k.music')!=='0',
   nodes:null,nextChord:0,chordIdx:0,
   ensure(){
     if(this.nodes||!Snd.ctx)return;
@@ -420,20 +441,25 @@ const Music={
     filt.connect(g);filt.connect(del);del.connect(fb);fb.connect(del);del.connect(g);
     const oscs=[];
     const detune=[-4,0,5];
+    // seed the pads on the first chord root; leaving them at the 440Hz default
+    // sounded a brief off-key drone before the first tick assigned a chord
+    const root0=55, iv0=[1,1.5,2];
     for(let i=0;i<3;i++){
       const o=c.createOscillator();o.type='sawtooth';o.detune.value=detune[i];
+      o.frequency.value=root0*iv0[i];
       const og=c.createGain();og.gain.value=0.045;
       o.connect(og);og.connect(filt);o.start();
       oscs.push(o);
     }
     const bass=c.createOscillator();bass.type='triangle';
+    bass.frequency.value=root0/2;
     const bg=c.createGain();bg.gain.value=0;
     bass.connect(bg);bg.connect(filt);bass.start();
     this.nodes={g,filt,oscs,bass,bg};
     this.timer=setInterval(()=>this.tick(),420);
   },
   setOn(on){
-    this.on=on;localStorage.setItem('e3k.music',on?'1':'0');
+    this.on=on;LS.set('e3k.music',on?'1':'0');
     if(this.nodes)this.nodes.g.gain.setTargetAtTime(on?0.15:0,Snd.ctx.currentTime,0.6);
   },
   tick(){
@@ -474,9 +500,8 @@ function genDesc(rng,sys){
   const f=['edible arts','vacuum krill','fabulous goat soup','plate tectonics','tourist attractions','arts graduates','cloud worms',
     'rock lobster','gargle blasters','hoopy casinos','silly games','wolf cubs','tree ants','mud fish','zero-g cricket','solar wind'];
   const c=['weird','peculiar','ancient','mysterious','ubiquitous'];
-  let t=pick.call(null,things);  // deterministic-ish is fine to fake with rng below
   const P=a=>a[Math.floor(rng()*a.length)];
-  t=P(things).replace('{f}',P(f)).replace('{c}',P(c));
+  const t=P(things).replace('{f}',P(f)).replace('{c}',P(c));
   return `The planet ${sys.name.charAt(0)+sys.name.slice(1).toLowerCase()} is ${P(adj)} ${t}.`;
 }
 
@@ -549,7 +574,7 @@ const COMMODITIES=[
 // deterministic market for a system on a given day
 function marketFor(sysIdx,day){
   const sys=GALAXY[sysIdx];
-  const rng=mulberry32(GALAXY_SEED^(sysIdx*7349)^(Math.floor(day)*911));
+  const rng=mulberry32(GALAXY_SEED^(sysIdx*7349)^(Math.floor(day)*911)^(CURRENT_GALAXY*33461));
   return COMMODITIES.map((c,ci)=>{
     const jitter=(rng()-0.5)*c.base*0.22;
     let price=(c.base+c.eco*(sys.economy-3.5)*1.15+jitter)*0.4;
@@ -583,7 +608,7 @@ function missionsFor(sysIdx,day,rep=0){
     if(!dest)continue;
     const d=distLY(GALAXY[sysIdx],dest);
     const deadline=Math.ceil(d*0.9+6+rng()*6);
-    const id=sysIdx*1000+Math.floor(day/3)*17+k;
+    const id=CURRENT_GALAXY*1e6+sysIdx*1000+Math.floor(day/3)*17+k;
     if(r<0.3){
       out.push({id,type:'data',dest:dest.i,deadline,
         reward:Math.round((60+d*7+rng()*40)*mult),
@@ -694,9 +719,30 @@ function hullGeo(key){
   if(!_geoCache[key]){
     const pts=SHIPS[key].v.map(v=>new THREE.Vector3(v[0],v[1],v[2]));
     const solid=new ConvexGeometry(pts);
-    _geoCache[key]={solid,edges:new THREE.EdgesGeometry(solid,14)};
+    const edges=new THREE.EdgesGeometry(solid,14);
+    // every ship of a type reuses these, so teardown must never dispose them
+    solid.userData.shared=edges.userData.shared=true;
+    _geoCache[key]={solid,edges};
   }
   return _geoCache[key];
+}
+
+/* Release GPU buffers for an object tree. three.js only frees WebGL resources
+   from dispose(); dropping a mesh from the scene graph leaves its buffers
+   allocated until the context is lost.
+   Two things must be skipped:
+     - geometry flagged `shared` (the per-ship-type hull cache)
+     - Sprite geometry, which three.js shares across EVERY sprite in the
+       program; disposing it from one expiring effect deletes the buffer
+       backing the sun, the planet haze and the docking beacon. */
+function disposeObj(root){
+  if(!root)return;
+  root.traverse(o=>{
+    const g=o.geometry;
+    if(g&&!o.isSprite&&!(g.userData&&g.userData.shared))g.dispose();
+    const m=o.material;
+    if(m)(Array.isArray(m)?m:[m]).forEach(x=>x&&x.dispose&&x.dispose());
+  });
 }
 function buildShipMesh(key,color){
   const g=hullGeo(key);
@@ -795,7 +841,7 @@ function buildCanister(color){
 }
 
 /* ---------------- three.js scene ---------------- */
-let renderer,scene,camera,composer,bloomPass,bloomOn=localStorage.getItem('e3k.bloom')!=='0';
+let renderer,scene,camera,composer,bloomPass,bloomOn=LS.get('e3k.bloom')!=='0';
 const W={planet:null,planetGlow:null,station:null,sun:null,sunLight:null,stars:null,titleShip:null};
 const transients=[];   // {obj, life, ttl, vel? , kind}
 
@@ -836,18 +882,18 @@ function onResize(){
   fitHudCanvases();
 }
 function setBloom(on){
-  bloomOn=on;localStorage.setItem('e3k.bloom',on?'1':'0');
+  bloomOn=on;LS.set('e3k.bloom',on?'1':'0');
   bloomPass.enabled=on;
 }
 
 function clearWorld(){
   for(const k of ['planet','planetGlow','station','sun','titleShip'])
-    if(W[k]){scene.remove(W[k]);W[k]=null;}
-  if(W.moons){for(const m of W.moons)scene.remove(m);W.moons=null;}
-  if(W.lights){for(const l of W.lights)scene.remove(l);W.lights=null;}
-  for(const t of transients)scene.remove(t.obj);
+    if(W[k]){scene.remove(W[k]);disposeObj(W[k]);W[k]=null;}
+  if(W.moons){for(const m of W.moons){scene.remove(m);disposeObj(m);}W.moons=null;}
+  if(W.lights){for(const l of W.lights)scene.remove(l);W.lights=null;}   // lights hold no buffers
+  for(const t of transients){scene.remove(t.obj);disposeObj(t.obj);}
   transients.length=0;
-  for(const n of NPCS)scene.remove(n.obj);
+  for(const n of NPCS){scene.remove(n.obj);disposeObj(n.obj);}
   NPCS.length=0;
 }
 
@@ -1024,8 +1070,7 @@ function updateTransients(dt){
     t.ttl-=dt;
     if(t.ttl<=0){
       scene.remove(t.obj);
-      if(t.obj.geometry)t.obj.geometry.dispose();
-      if(t.obj.material)t.obj.material.dispose();
+      disposeObj(t.obj);      // sprite-safe: never touches the shared sprite geometry
       transients.splice(i,1);continue;
     }
     const f=t.ttl/t.life;
@@ -1083,7 +1128,7 @@ function updateHyperFX(dt){
 function stopHyperFX(){
   if(!hyperStreaks)return;
   scene.remove(hyperStreaks.obj);
-  hyperStreaks.obj.geometry.dispose();
+  disposeObj(hyperStreaks.obj);   // geometry *and* material
   hyperStreaks=null;
 }
 
@@ -1226,7 +1271,10 @@ function checkAchs(){
   for(const a of ACHS){
     if(!c.ach.includes(a[0])&&a[3](c)){
       c.ach.push(a[0]);
-      msg('ACHIEVEMENT: '+a[1],cssVar('--am'));
+      // the HUD (and its message strip) is hidden while docked, so most
+      // achievements — earnings, jumps, systems, contracts — would fire unseen
+      if(G.mode==='docked')G.dockLog.push('★ ACHIEVEMENT UNLOCKED: '+a[1]);
+      else msg('ACHIEVEMENT: '+a[1],cssVar('--am'));
       Snd.dockChime();
     }
   }
@@ -1248,7 +1296,7 @@ const G={
   hyper:null,          // {target,count,t,phase}
   autodock:0,
   spawnT:4, msgQueue:[], dockLog:[],
-  invertY:localStorage.getItem('e3k.invert')==='1',
+  invertY:LS.get('e3k.invert')==='1',
   paused:false, dead:false,
 };
 
@@ -1270,12 +1318,14 @@ const cargoUsed=c=>c.cargo.reduce((a,b)=>a+b,0)+c.missionCargo;
 
 /* ---------------- save / load ---------------- */
 function saveTo(slot){
-  const o={...G.cmdr,ts:Date.now()};
-  localStorage.setItem('e3k.'+slot,JSON.stringify(o));
+  // sysName is stored so save-slot listings stay truthful even when the
+  // galaxy currently in memory is not the one the save was made in
+  const o={...G.cmdr,sysName:GALAXY[G.cmdr.system].name,ts:Date.now()};
+  return LS.set('e3k.'+slot,JSON.stringify(o));
 }
 function loadFrom(slot){
   try{
-    const o=JSON.parse(localStorage.getItem('e3k.'+slot));
+    const o=JSON.parse(LS.get('e3k.'+slot));
     if(o&&o.v===1)return o;
   }catch(e){}
   return null;
@@ -1283,7 +1333,11 @@ function loadFrom(slot){
 function slotMeta(slot){
   const o=loadFrom(slot);
   if(!o)return null;
-  return `${o.name} · ${GALAXY[o.system].name} · ${fmtCr(o.credits)} · DAY ${Math.floor(o.days)}`;
+  // only trust the in-memory galaxy for the name when it is the save's own galaxy
+  const gal=o.galaxy||1;
+  const where=o.sysName||(gal===CURRENT_GALAXY?GALAXY[o.system].name:'SYSTEM '+o.system);
+  const galTag=gal>1?` · GAL ${gal}`:'';
+  return `${o.name} · ${where}${galTag} · ${fmtCr(o.credits)} · DAY ${Math.floor(o.days)}`;
 }
 
 /* ---------------- messages ---------------- */
@@ -1298,6 +1352,19 @@ function msg(text,color){
 }
 
 /* ---------------- system entry / docking ---------------- */
+/* Arm the Constrictor ambush whenever the player is loose in its system with
+   the contract still open. Called on arrival AND on launch, because docking
+   clears every NPC — without re-arming, docking once would retire the boss
+   permanently and strand the storyline at chapter five. */
+function armBoss(){
+  const c=G.cmdr,st=c&&c.story;
+  const live=!!(st&&st.stage===5&&!st.killed&&st.gal===c.galaxy
+                &&c.system===st.sys&&!G.witch);
+  // only queue an arrival when one is not already on the scanner
+  G.bossT=(live&&!NPCS.some(n=>n.key==='constrictor'))?9:0;
+  return live;
+}
+
 function enterSystem(idx,arriving){
   G.witch=null;
   G.cmdr.system=idx;
@@ -1311,29 +1378,35 @@ function enterSystem(idx,arriving){
   G.speed=maxSpd()*0.3;G.throttle=0.3;
   G.warp=false;G.lock.target=null;
   G.spawnT=arriving?3:8;
-  // Constrictor showdown
-  const st=G.cmdr.story;
-  G.bossT=(st&&st.stage===5&&!st.killed&&st.gal===G.cmdr.galaxy&&idx===st.sys)?9:0;
+  armBoss();
   if(arriving)msg('ARRIVAL: '+G.sys.name+' SYSTEM');
 }
 
 function dock(){
   G.mode='docked';
   G.warp=false;G.speed=0;G.throttle=0;G.lock.target=null;
+  G.witch=null;                      // docking always means a real station
   G.shieldF=G.shieldA=100;G.energy=400;G.laserTemp=0;G.cabinHeat=0;
   G.cmdr.lastStation=G.cmdr.system;
   G.cmdr.days=Math.round((G.cmdr.days+0.1)*10)/10;
   G.dockLog.length=0;
-  processMissionsOnDock();
-  storyAdvance();
-  if(G.cmdr.story&&G.cmdr.story.stage===0&&storyEligible(G.cmdr))
-    G.dockLog.push('NAVY CHANNEL: a liaison officer wants a word — see the BBS.');
-  markVisited(G.cmdr);
-  checkAchs();
+  // everything below can throw on malformed save data; the station UI must open
+  // regardless, or the player is left in 'docked' mode with no interface at all
+  try{
+    processMissionsOnDock();
+    storyAdvance();
+    if(G.cmdr.story&&G.cmdr.story.stage===0&&storyEligible(G.cmdr))
+      G.dockLog.push('NAVY CHANNEL: a liaison officer wants a word — see the BBS.');
+    markVisited(G.cmdr);
+    checkAchs();
+  }catch(e){
+    G.dockLog.push('STATION SYSTEMS REPORTED A FAULT — SOME RECORDS MAY BE INCOMPLETE');
+  }
   G.mkt=marketFor(G.cmdr.system,G.cmdr.days);
-  saveTo('autosave');
+  if(!saveTo('autosave'))
+    G.dockLog.push('WARNING: COULD NOT WRITE TO SHIP RECORDER — PROGRESS IS NOT BEING SAVED');
   Snd.dockChime();Snd.engine(0);
-  for(const n of NPCS)scene.remove(n.obj);
+  for(const n of NPCS){scene.remove(n.obj);disposeObj(n.obj);}
   NPCS.length=0;
   showDocked();
 }
@@ -1349,6 +1422,7 @@ function undock(){
   camera.quaternion.setFromRotationMatrix(_m1);
   G.speed=maxSpd()*0.35;G.throttle=0.35;
   G.spawnT=10;G.grace=40;
+  armBoss();
   msg('LAUNCH CLEARED — '+G.sys.name+' STATION');
   updateHud(true);
 }
@@ -1391,7 +1465,7 @@ function processMissionsOnDock(){
       G.dockLog.push(`BOUNTY CONTRACT COMPLETE — ${fmtCr(m.reward)} PAID`);
       c.missions.splice(i,1);Snd.cash();continue;
     }
-    if((m.type==='data'||m.type==='cargo'||m.type==='vip')&&m.dest===c.system){
+    if((m.type==='data'||m.type==='cargo'||m.type==='vip')&&m.dest===c.system&&inMissionGalaxy(m)){
       let pay=m.reward;
       if(m.type==='vip'&&c.days-m.acceptDay<=m.deadline/2){
         pay+=m.bonus;
@@ -1399,10 +1473,10 @@ function processMissionsOnDock(){
       }
       c.credits+=pay;c.rep=(c.rep||0)+1;done(pay);
       if(m.type==='cargo'||m.type==='vip')c.missionCargo=Math.max(0,c.missionCargo-m.qty);
-      G.dockLog.push(`${m.type==='data'?'DATA DELIVERED':m.type==='vip'?'PASSENGER DISEMBARKED':'FREIGHT DELIVERED'} — ${fmtCr(m.reward)} PAID`);
+      G.dockLog.push(`${m.type==='data'?'DATA DELIVERED':m.type==='vip'?'PASSENGER DISEMBARKED':'FREIGHT DELIVERED'} — ${fmtCr(pay)} PAID`);
       c.missions.splice(i,1);Snd.cash();continue;
     }
-    if(m.type==='hop'&&m.dests[m.stage]===c.system){
+    if(m.type==='hop'&&m.dests[m.stage]===c.system&&inMissionGalaxy(m)){
       m.stage++;
       if(m.stage>=m.dests.length){
         c.credits+=m.reward;c.rep=(c.rep||0)+2;done(m.reward);
@@ -1425,14 +1499,19 @@ function processMissionsOnDock(){
 function acceptMission(m){
   const c=G.cmdr;
   if(c.missions.length>=4){msg('CONTRACT LOG FULL (4)');Snd.err();return false;}
-  if(c.missions.some(x=>x.id===m.id)){Snd.err();return false;}
+  if(c.missions.some(x=>x.id===m.id&&x.gal===c.galaxy)){Snd.err();return false;}
   if((m.type==='cargo'||m.type==='vip')&&cargoUsed(c)+m.qty>c.cargoCap){Snd.err();return false;}
-  const copy={...m,deadlineDay:Math.ceil(c.days)+m.deadline,progress:0,acceptDay:c.days};
+  // gal is stamped because destinations are bare system indices; without it a
+  // contract would settle against whatever system shares that index in the
+  // galaxy you happen to be standing in
+  const copy={...m,gal:c.galaxy,deadlineDay:Math.ceil(c.days)+m.deadline,progress:0,acceptDay:c.days};
   if(m.type==='cargo'||m.type==='vip')c.missionCargo+=m.qty;
   c.missions.push(copy);
   Snd.cash();
   return true;
 }
+/* a contract only settles in the galaxy it was signed in */
+const inMissionGalaxy=m=>(m.gal===undefined||m.gal===G.cmdr.galaxy);
 
 /* ---------------- trading ---------------- */
 function buyGood(ci,qty){
@@ -1526,6 +1605,7 @@ function removeNPC(n){
   const i=NPCS.indexOf(n);
   if(i>=0)NPCS.splice(i,1);
   scene.remove(n.obj);
+  disposeObj(n.obj);   // asteroids and canisters build fresh geometry per spawn
   if(G.lock.target===n)G.lock.target=null;
 }
 
@@ -1780,7 +1860,7 @@ function updateLock(dt){
     if(cand){
       G.lock.timer+=dt;
       lb.className='locking';
-      if(G.lock.timer>0.8&&G.cmdr.missiles>0){
+      if(G.lock.timer>0.8){
         G.lock.target=cand;Snd.lockOn();
         msg('TARGET LOCK: '+cand.def.label);
       }
@@ -1849,14 +1929,21 @@ function die(){
     G.cmdr.equip.pod=false;
     G.cmdr.cargo.fill(0);
     G.cmdr.missionCargo=0;
-    for(const m of [...G.cmdr.missions])if(m.type==='cargo')G.cmdr.missions.splice(G.cmdr.missions.indexOf(m),1);
+    // the pod carries no freight and no passengers — those contracts are void
+    for(const m of [...G.cmdr.missions])
+      if(m.type==='cargo'||m.type==='vip')G.cmdr.missions.splice(G.cmdr.missions.indexOf(m),1);
     G.cmdr.missiles=0;
     G.cmdr.days+=2;
     G.cmdr.system=G.cmdr.lastStation;
     msg('ESCAPE POD EJECTED');
     G.sys=GALAXY[G.cmdr.system];
     G.mode='ejecting';   // inert; main loop ignores this mode
-    G.energy=400;G.shieldF=G.shieldA=100;
+    // the pod is towed to a real station, so every deep-space state must clear:
+    // leaving G.witch set would spawn Thargoids in civilised space and turn the
+    // next HYPER into a free, fuel-less escape jump
+    G.witch=null;G.hyper=null;G.bossT=0;G.warp=false;G.lock.target=null;
+    $('hyperct').classList.add('hidden');
+    G.energy=400;G.shieldF=G.shieldA=100;G.laserTemp=0;G.cabinHeat=0;
     Snd.engine(0);
     setTimeout(()=>{
       buildSystemScene(G.sys);
@@ -2200,8 +2287,9 @@ function updateHud(force){
   setBar('gSpeed',G.speed/maxSpd());
   setBar('gFuel',c.fuel/7);
   setBar('gLaser',G.laserTemp/100);
-  const pd=camera.position.length(),pr=G.sys?G.sys.radius:1;
-  setBar('gAlt',clamp((pd-pr)/(pr*6),0,1));
+  const pd=camera.position.length(),pr=G.sys?G.sys.radius:0;
+  // witchspace has no planet (radius 0); 0/0 would write an invalid NaN% width
+  setBar('gAlt',pr>0?clamp((pd-pr)/(pr*6),0,1):1);
   setBar('gHeat',G.cabinHeat/100);
   setBar('gFS',G.shieldF/100);
   setBar('gAS',G.shieldA/100);
@@ -2264,7 +2352,7 @@ function drawScanner(){
     else x.fillRect(px-bs*0.7,pz+stick-bs*0.7,bs*1.4,bs*1.4);
   };
   for(const n of NPCS){
-    let col='#ffb347',sq=false;
+    let col='#ffb347';
     if(n.kind==='pirate'||(n.kind==='missile'&&n.target==='player'))col='#ff5470';
     else if(n.kind==='police')col=isWanted()?'#ff5470':'#6ea8ff';
     else if(n.kind==='asteroid')col='#8fa3ad';
@@ -2405,9 +2493,14 @@ function renderTab(tab){
       act='<h3>ACTIVE CONTRACTS</h3>'+c.missions.map(m=>{
         const left=Math.max(0,Math.ceil(m.deadlineDay-c.days));
         const prog=m.type==='bounty'?` · ${m.progress||0}/${m.kills} KILLS`:'';
-        const dest=m.type==='hop'?' · NEXT STOP: '+GALAXY[m.dests[m.stage]].name
-          :m.dest!==undefined?' · DEST: '+GALAXY[m.dest].name:'';
-        return `<div class="msrow">${m.text}<br><span class="rw">${fmtCr(m.reward)}</span> · ${left} DAYS LEFT${prog}${dest}</div>`;
+        const here=(m.gal===undefined||m.gal===c.galaxy);
+        // a destination index only names a real world inside its own galaxy
+        const idx=m.type==='hop'?m.dests[m.stage]:m.dest;
+        const dest=idx===undefined?''
+          :here?`${m.type==='hop'?' · NEXT STOP: ':' · DEST: '}${GALAXY[idx].name}`
+               :` · DEST: GALAXY ${m.gal} — OUT OF REACH`;
+        const warn=here?'':'<br><span class="danger">Cannot be delivered from this galaxy.</span>';
+        return `<div class="msrow">${m.text}<br><span class="rw">${fmtCr(m.reward)}</span> · ${left} DAYS LEFT${prog}${dest}${warn}</div>`;
       }).join('');
     }
     const avail=missionsFor(c.system,c.days,c.rep||0).filter(m=>!c.missions.some(x=>x.id===m.id));
@@ -2484,15 +2577,15 @@ function renderTab(tab){
       <div class="togglerow"><span>SOUND</span><button class="tbtn" id="tgSnd">${Snd.muted?'OFF':'ON'}</button></div>
       <div class="togglerow"><span>MUSIC</span><button class="tbtn" id="tgMus">${Music.on?'ON':'OFF'}</button></div>
       <div class="togglerow"><span>GLOW FX (BLOOM)</span><button class="tbtn" id="tgGlow">${bloomOn?'ON':'OFF'}</button></div>
-      <div class="togglerow"><span>INVERT STICK PITCH</span><button class="tbtn" id="tgInv">${G.invertY?'ON':'OFF'}</button></div>
+      <div class="togglerow"><span>INVERT PITCH (ALL CONTROLS)</span><button class="tbtn" id="tgInv">${G.invertY?'ON':'OFF'}</button></div>
       <div class="togglerow"><span>MOUSE STEERING (DESKTOP)</span><button class="tbtn" id="tgMouse">${Mouse.on?'ON':'OFF'}</button></div>
       <div class="togglerow"><span>TILT ASSIST (MOBILE)</span><button class="tbtn" id="tgTilt">${Tilt.on?'ON':'OFF'}</button></div>
       <div class="togglerow"><span>CONTROLS GUIDE</span><button class="tbtn" id="tgHelp">VIEW</button></div>`;
     p.querySelector('#tgSnd').onclick=e=>{Snd.setMute(!Snd.muted);e.target.textContent=Snd.muted?'OFF':'ON';};
     p.querySelector('#tgMus').onclick=e=>{Music.ensure();Music.setOn(!Music.on);e.target.textContent=Music.on?'ON':'OFF';};
     p.querySelector('#tgGlow').onclick=e=>{setBloom(!bloomOn);e.target.textContent=bloomOn?'ON':'OFF';};
-    p.querySelector('#tgInv').onclick=e=>{G.invertY=!G.invertY;localStorage.setItem('e3k.invert',G.invertY?'1':'0');e.target.textContent=G.invertY?'ON':'OFF';};
-    p.querySelector('#tgMouse').onclick=e=>{Mouse.on=!Mouse.on;localStorage.setItem('e3k.mouse',Mouse.on?'1':'0');e.target.textContent=Mouse.on?'ON':'OFF';};
+    p.querySelector('#tgInv').onclick=e=>{G.invertY=!G.invertY;LS.set('e3k.invert',G.invertY?'1':'0');e.target.textContent=G.invertY?'ON':'OFF';};
+    p.querySelector('#tgMouse').onclick=e=>{Mouse.on=!Mouse.on;LS.set('e3k.mouse',Mouse.on?'1':'0');e.target.textContent=Mouse.on?'ON':'OFF';};
     p.querySelector('#tgTilt').onclick=async e=>{
       if(Tilt.on){disableTilt();e.target.textContent='OFF';}
       else{e.target.textContent=(await enableTilt())?'ON':'OFF';}
@@ -2779,8 +2872,8 @@ function initTitle(){
     G.sys=GALAXY[7];
     enterSystem(7,false);
     dock();
-    if(!localStorage.getItem('e3k.helped')){
-      localStorage.setItem('e3k.helped','1');
+    if(!LS.get('e3k.helped')){
+      LS.set('e3k.helped','1');
       showHelp(false);
     }
   };
@@ -2789,8 +2882,12 @@ function initTitle(){
 /* ---------------- input: keyboard ---------------- */
 const KEYS=new Set();
 function initInput(){
+  const isTyping=t=>!!t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.isContentEditable);
   addEventListener('keydown',e=>{
     Snd.ensure();Snd.resume();Music.ensure();
+    // leave the commander-name field and the transfer-code box alone, or Space
+    // and the arrow keys get swallowed before they can be typed
+    if(isTyping(e.target))return;
     if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code))e.preventDefault();
     if(!e.repeat)keyAction(e.code);
     KEYS.add(e.code);
@@ -2813,7 +2910,7 @@ function initInput(){
 }
 
 /* mouse steering (optional, desktop): ship turns toward the cursor */
-const Mouse={on:localStorage.getItem('e3k.mouse')==='1',x:0,y:0};
+const Mouse={on:LS.get('e3k.mouse')==='1',x:0,y:0};
 function mouseAxis(v){
   const dz=0.09,span=0.5;
   const a=Math.abs(v);
@@ -2823,12 +2920,12 @@ function mouseAxis(v){
 
 /* tilt assist (optional, mobile): gyro fine-steering on top of the stick */
 const Tilt={on:false,listening:false,base:null,pitch:0,roll:0,
-  want:localStorage.getItem('e3k.tilt')==='1'};
+  want:LS.get('e3k.tilt')==='1'};
 async function enableTilt(){
   try{
     if(typeof DeviceOrientationEvent!=='undefined'&&DeviceOrientationEvent.requestPermission){
       const r=await DeviceOrientationEvent.requestPermission();
-      if(r!=='granted'){localStorage.setItem('e3k.tilt','0');Tilt.want=false;return false;}
+      if(r!=='granted'){LS.set('e3k.tilt','0');Tilt.want=false;return false;}
     }
     if(!Tilt.listening){
       addEventListener('deviceorientation',e=>{
@@ -2846,13 +2943,13 @@ async function enableTilt(){
       Tilt.listening=true;
     }
     Tilt.on=true;Tilt.base=null;Tilt.want=true;
-    localStorage.setItem('e3k.tilt','1');
+    LS.set('e3k.tilt','1');
     return true;
   }catch(_){return false;}
 }
 function disableTilt(){
   Tilt.on=false;Tilt.want=false;Tilt.pitch=Tilt.roll=0;
-  localStorage.setItem('e3k.tilt','0');
+  LS.set('e3k.tilt','0');
 }
 
 function keyAction(code){
@@ -2888,8 +2985,10 @@ function cycleLaser(){
 
 function pollKeys(dt){
   let pitch=0,roll=0;
-  if(KEYS.has('KeyS')||KEYS.has('ArrowDown'))pitch+=1;   // nose up
-  if(KEYS.has('KeyW')||KEYS.has('ArrowUp'))pitch-=1;
+  // W/up raises the nose, matching the touch stick and mouse steering; the
+  // INVERT PITCH setting flips all three together for flight-sim habits
+  if(KEYS.has('KeyW')||KEYS.has('ArrowUp'))pitch+=1;     // nose up
+  if(KEYS.has('KeyS')||KEYS.has('ArrowDown'))pitch-=1;   // nose down
   if(KEYS.has('KeyD')||KEYS.has('ArrowRight'))roll+=1;
   if(KEYS.has('KeyA')||KEYS.has('ArrowLeft'))roll-=1;
   if(KEYS.has('KeyR'))G.throttle=clamp(G.throttle+dt*0.7,0,1);
@@ -2984,11 +3083,22 @@ if(HEADLESS){
 }
 let lastT=performance.now(),fpsAcc=0,fpsN=0,fpsDone=false,elapsed=0;
 
+let idleAcc=0;
+/* The station UI and the pause overlay cover the 3D view almost completely,
+   so re-rendering it at display rate is pure battery burn on a phone. Drop to
+   ~8fps for the sliver that shows through. */
+function renderThrottled(dt){
+  const covered=G.paused||G.mode==='docked'||G.mode==='ejecting';
+  if(!covered){idleAcc=0;renderFrame();return;}
+  idleAcc+=dt;
+  if(idleAcc>=0.125){idleAcc=0;renderFrame();}
+}
+
 function loop(now){
   requestAnimationFrame(loop);
   let dt=Math.min(0.05,(now-lastT)/1000);
   lastT=now;
-  if(G.paused){renderFrame();return;}
+  if(G.paused){renderThrottled(dt);return;}
   elapsed+=dt;
 
   if(G.mode==='title'){
@@ -3024,7 +3134,7 @@ function loop(now){
 
   if(W.stars)W.stars.position.copy(camera.position);
   updateTransients(dt);
-  renderFrame();
+  renderThrottled(dt);
 
   // auto-disable bloom on weak GPUs (first 12 s sample)
   if(!fpsDone&&G.mode!=='title'){
