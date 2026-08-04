@@ -1,7 +1,7 @@
 {
   "name": "ELITE 3K",
   "short_name": "E3K",
-  "description": "A single-file HTML5 tribute to Elite (1984) — neon wireframe space trading and combat across 8 procedural galaxies.",
+  "description": "A single-file HTML5 tribute to Elite (1984) — flat-shaded space trading and combat across 8 procedural galaxies.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "fullscreen",
